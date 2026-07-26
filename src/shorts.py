@@ -99,10 +99,11 @@ def _save_debug_checkpoint(
     checkpoint_path = _get_debug_checkpoint_path(video_file)
     
     # Convert _SecondsTime objects to serializable format
-    scenes_data = [
-        (s[0].get_seconds(), s[1].get_seconds()) 
-        for s in analysis_result.scenes
-    ]
+    scenes_data = (
+        [(s[0].get_seconds(), s[1].get_seconds()) for s in analysis_result.scenes]
+        if analysis_result and hasattr(analysis_result, "scenes") and analysis_result.scenes
+        else []
+    )
     
     processed_scenes_data = [
         (s[0].get_seconds(), s[1].get_seconds()) 
@@ -125,8 +126,8 @@ def _save_debug_checkpoint(
     checkpoint = {
         "video_file": str(video_file),
         "scenes": scenes_data,
-        "video_times": analysis_result.video_times,
-        "video_scores": analysis_result.video_scores,
+        "video_times": analysis_result.video_times if analysis_result and hasattr(analysis_result, "video_times") else np.array([]),
+        "video_scores": analysis_result.video_scores if analysis_result and hasattr(analysis_result, "video_scores") else np.array([]),
         "audio_times": audio_times,
         "audio_score": audio_score,
         "processed_scenes": processed_scenes_data,
@@ -689,6 +690,11 @@ def rgb_to_hsv_torch(image: torch.Tensor, epsilon: float = 1e-10) -> torch.Tenso
     
     return torch.stack([out_h, out_s, out_v], dim=1)
 
+
+def compute_video_action_profile(video_path: Path, fps: int = 6) -> Tuple[np.ndarray, np.ndarray]:
+    """Backward compatibility wrapper around analyze_video_content."""
+    res = analyze_video_content(video_path, action_fps=fps)
+    return res.video_times, res.video_scores
 
 
 # --- Audio-based action scoring (GPU) -------------------------------------------
@@ -2076,104 +2082,146 @@ def process_video(video_file: Path, config: ProcessingConfig, output_dir: Path) 
         # Update config with auto-calculated lengths BEFORE scene processing
         config = update_config_with_auto_lengths(config, video_duration)
 
-        # Unified Video Analysis (Single Pass)
-        logging.info("Analyzing video content (Scenes & Action) [GPU]...")
-        analysis_result = analyze_video_content(video_file)
-        
-        scene_list = analysis_result.scenes
-        video_times = analysis_result.video_times
-        video_score = analysis_result.video_scores
-
-        # Explicitly clear memory
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        logging.info("Computing audio action profile (GPU)...")
-        audio_times, audio_score = compute_audio_action_profile(video_file)
-
-        # Explicitly clear memory
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        # Note: process_video now has video_times/video_score from the unified pass
-        
-        processed_scene_list = combine_scenes(scene_list, config)
-        processed_scene_list = split_overlong_scenes(processed_scene_list, config)
-
-        logging.info("Scenes list with action scores:")
-        for i, scene in enumerate(processed_scene_list, start=1):
-            duration = scene[1].get_seconds() - scene[0].get_seconds()
-            score_val = scene_action_score(scene, audio_times, audio_score, video_times, video_score)
-            logging.info(
-                "    Scene %2d: Duration %5.1f s, ActionScore %7.3f,"
-                " Start %s / Frame %d, End %s / Frame %d",
-                i,
-                duration,
-                score_val,
-                scene[0].get_timecode(),
-                scene[0].get_frames(),
-                scene[1].get_timecode(),
-                scene[1].get_frames(),
-            )
-
-        sorted_processed_scene_list = sorted(
-            processed_scene_list,
-            key=lambda s: scene_action_score(s, audio_times, audio_score, video_times, video_score),
-            reverse=True,
-        )
-
-        logging.info("Sorted scenes list (by heuristic action score):")
-        for i, scene in enumerate(sorted_processed_scene_list, start=1):
-            duration = scene[1].get_seconds() - scene[0].get_seconds()
-            score_val = scene_action_score(scene, audio_times, audio_score, video_times, video_score)
-            logging.info(
-                "    Scene %2d: ActionScore %7.3f, Duration %5.1f s,"
-                " Start %s / Frame %d, End %s / Frame %d",
-                i,
-                score_val,
-                duration,
-                scene[0].get_timecode(),
-                scene[0].get_frames(),
-                scene[1].get_timecode(),
-                scene[1].get_frames(),
-            )
-
-        # --- AI-ASSISTED RANKING ---
+        # Check AI config and Deep Analysis mode
         ai_enabled, candidate_count_env, clip_duration = _get_ai_config()
-        
-        # video_duration already calculated at start of this block
-        
-        # Calculate dynamic candidate count (or use env override if set)
-        if candidate_count_env > 0:
-            # User explicitly set CANDIDATE_CLIP_COUNT - use that
-            candidate_count = candidate_count_env
-            logging.info(f"Using user-specified candidate count: {candidate_count}")
-        else:
-            # Dynamic calculation based on video characteristics
-            candidate_count = calculate_dynamic_candidate_count(
-                num_scenes=len(processed_scene_list),
-                video_duration=video_duration,
-                target_output_count=config.scene_limit,
-            )
-        
-        # Track detected categories for each scene (for subtitle style matching)
+        is_gemini = os.getenv("AI_PROVIDER", "openai").lower() == "gemini"
+        deep_analysis = os.getenv("GEMINI_DEEP_ANALYSIS", "false").lower() in ("true", "1", "yes")
+
         scene_categories: dict = {}  # scene_start -> detected_category
         ai_ranked = None
-        
-        if ai_enabled and len(processed_scene_list) > 0:
-            logging.info("Running AI-assisted scene ranking...")
-            ai_ranked = rank_scenes_with_ai(
-                video_file,
+        analysis_result = None
+        audio_times = np.array([])
+        audio_score = np.array([])
+        video_times = np.array([])
+        video_score = np.array([])
+        processed_scene_list = []
+        sorted_processed_scene_list = []
+
+        direct_deep_success = False
+
+        # --- DIRECT GEMINI DEEP ANALYSIS PATHWAY ---
+        if ai_enabled and is_gemini and deep_analysis:
+            try:
+                from ai_providers import GeminiAnalyzer
+                analyzer = GeminiAnalyzer()
+                if analyzer.is_available():
+                    logging.info("🧠 Gemini Deep Analysis Enabled: Starting Direct Full Video Scan...")
+                    # Calculate candidate count
+                    if candidate_count_env > 0:
+                        candidate_count = candidate_count_env
+                    else:
+                        candidate_count = calculate_dynamic_candidate_count(
+                            num_scenes=15,  # estimated scene baseline
+                            video_duration=video_duration,
+                            target_output_count=config.scene_limit,
+                        )
+
+                    moments = analyzer.analyze_full_video(video_file, video_duration, target_count=candidate_count)
+                    if moments and len(moments) > 0:
+                        ai_ranked = []
+                        for start, end, cat, score in moments:
+                            scene_obj = [_SecondsTime(start), _SecondsTime(end)]
+                            ai_ranked.append((scene_obj, 200.0 + score, cat))
+                            logging.info(f"    ✨ Direct Deep Analysis found: {cat} ({score:.2f}) at {start:.1f}s-{end:.1f}s")
+                        
+                        direct_deep_success = True
+                        logging.info(f"🚀 Direct Gemini Deep Analysis succeeded with {len(ai_ranked)} moments! Skipping local heuristic scene & audio passes.")
+                    else:
+                        logging.warning("⚠️ Gemini Deep Analysis returned no moments. Falling back to local heuristic analysis...")
+                else:
+                    logging.warning("⚠️ Gemini API key not configured or provider unavailable. Falling back to local heuristic analysis...")
+            except Exception as e:
+                logging.error(f"⚠️ Direct Gemini Deep Analysis failed ({e}). Falling back to local heuristic analysis...")
+                ai_ranked = None
+                direct_deep_success = False
+
+        # --- LOCAL HEURISTIC ANALYSIS (FALLBACK OR DEFAULT) ---
+        if not direct_deep_success:
+            # Unified Video Analysis (Single Pass)
+            logging.info("Analyzing video content (Scenes & Action) [GPU]...")
+            analysis_result = analyze_video_content(video_file)
+            
+            scene_list = analysis_result.scenes
+            video_times = analysis_result.video_times
+            video_score = analysis_result.video_scores
+
+            # Explicitly clear memory
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            logging.info("Computing audio action profile (GPU)...")
+            audio_times, audio_score = compute_audio_action_profile(video_file)
+
+            # Explicitly clear memory
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            processed_scene_list = combine_scenes(scene_list, config)
+            processed_scene_list = split_overlong_scenes(processed_scene_list, config)
+
+            logging.info("Scenes list with action scores:")
+            for i, scene in enumerate(processed_scene_list, start=1):
+                duration = scene[1].get_seconds() - scene[0].get_seconds()
+                score_val = scene_action_score(scene, audio_times, audio_score, video_times, video_score)
+                logging.info(
+                    "    Scene %2d: Duration %5.1f s, ActionScore %7.3f,"
+                    " Start %s / Frame %d, End %s / Frame %d",
+                    i,
+                    duration,
+                    score_val,
+                    scene[0].get_timecode(),
+                    scene[0].get_frames(),
+                    scene[1].get_timecode(),
+                    scene[1].get_frames(),
+                )
+
+            sorted_processed_scene_list = sorted(
                 processed_scene_list,
-                audio_times,
-                audio_score,
-                video_times,
-                video_score,
-                candidate_count=candidate_count,
-                clip_duration=clip_duration,
+                key=lambda s: scene_action_score(s, audio_times, audio_score, video_times, video_score),
+                reverse=True,
             )
+
+            logging.info("Sorted scenes list (by heuristic action score):")
+            for i, scene in enumerate(sorted_processed_scene_list, start=1):
+                duration = scene[1].get_seconds() - scene[0].get_seconds()
+                score_val = scene_action_score(scene, audio_times, audio_score, video_times, video_score)
+                logging.info(
+                    "    Scene %2d: ActionScore %7.3f, Duration %5.1f s,"
+                    " Start %s / Frame %d, End %s / Frame %d",
+                    i,
+                    score_val,
+                    duration,
+                    scene[0].get_timecode(),
+                    scene[0].get_frames(),
+                    scene[1].get_timecode(),
+                    scene[1].get_frames(),
+                )
+
+            # --- AI-ASSISTED RANKING ---
+            if candidate_count_env > 0:
+                candidate_count = candidate_count_env
+                logging.info(f"Using user-specified candidate count: {candidate_count}")
+            else:
+                candidate_count = calculate_dynamic_candidate_count(
+                    num_scenes=len(processed_scene_list),
+                    video_duration=video_duration,
+                    target_output_count=config.scene_limit,
+                )
+            
+            if ai_enabled and len(processed_scene_list) > 0:
+                logging.info("Running AI-assisted scene ranking...")
+                ai_ranked = rank_scenes_with_ai(
+                    video_file,
+                    processed_scene_list,
+                    audio_times,
+                    audio_score,
+                    video_times,
+                    video_score,
+                    candidate_count=candidate_count,
+                    clip_duration=clip_duration,
+                )
     else:
         # Using checkpoint data - need to reconstruct some variables
         sorted_processed_scene_list = sorted(

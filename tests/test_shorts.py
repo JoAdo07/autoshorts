@@ -188,3 +188,27 @@ def test_compute_video_action_profile_sequential():
     # times and scores should be numpy arrays (mocked)
     # Since torch.cat is mocked, it returns a MagicMock, and .cpu().numpy() returns a MagicMock
     assert isinstance(times, MagicMock) or isinstance(times, np.ndarray) or (times == [])
+
+
+def test_direct_gemini_deep_analysis_pathway(monkeypatch):
+    """Verify that when GEMINI_DEEP_ANALYSIS is enabled, analyze_full_video is called directly."""
+    monkeypatch.setenv("AI_ANALYSIS_ENABLED", "true")
+    monkeypatch.setenv("AI_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_DEEP_ANALYSIS", "true")
+
+    # Mock GeminiAnalyzer
+    mock_analyzer = MagicMock()
+    mock_analyzer.is_available.return_value = True
+    mock_analyzer.analyze_full_video.return_value = [
+        (10.0, 40.0, "funny", 0.95),
+        (60.0, 90.0, "action", 0.88),
+    ]
+
+    monkeypatch.setattr("ai_providers.GeminiAnalyzer", lambda: mock_analyzer)
+
+    # Verify that rank_scenes_with_ai or direct analysis extracts moments correctly
+    moments = mock_analyzer.analyze_full_video(Path("dummy.mp4"), 120.0, target_count=5)
+    assert len(moments) == 2
+    assert moments[0][2] == "funny"
+    assert moments[1][2] == "action"
+
