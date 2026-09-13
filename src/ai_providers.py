@@ -12,6 +12,7 @@ import logging
 import os
 import tempfile
 import subprocess
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -563,14 +564,17 @@ Be honest with scores - if a clip is genuinely just normal action, that's fine. 
         import tempfile
         import hashlib
         
-        # Generate hash based on file path and size/mtime to ensure uniqueness per video
-        video_hash = hashlib.md5(f"{video_path}_{video_path.stat().st_size}".encode()).hexdigest()[:10]
+        # Generate hash based on resolved absolute path and file size to ensure consistent caching
+        video_path_abs = video_path.resolve()
+        video_hash = hashlib.md5(f"{video_path_abs}_{video_path_abs.stat().st_size}".encode()).hexdigest()[:10]
         # Clean filename for safety but keep extension
         clean_name = "".join(c for c in video_path.stem if c.isalnum() or c in ('-', '_'))[:30]
         temp_proxy = Path(tempfile.gettempdir()) / f"proxy_{clean_name}_{video_hash}.mp4"
         
+        # Temporary file path for atomic writing (.part.mp4)
+        temp_proxy_part = temp_proxy.with_suffix(".part.mp4")
+
         # Try to use GPU-accelerated encoding if available (much faster)
-        # Using hevc_nvenc for fast encoding, scale_cuda for GPU resizing
         gpu_cmd = [
             "ffmpeg", "-y",
             "-hwaccel", "cuda",
@@ -582,7 +586,7 @@ Be honest with scores - if a clip is genuinely just normal action, that's fine. 
             "-rc", "constqp",
             "-qp", "35", # High compression
             "-c:a", "aac", "-b:a", "32k", "-ac", "1",
-            str(temp_proxy)
+            str(temp_proxy_part)
         ]
         
         # Fallback to CPU if GPU fails
@@ -594,40 +598,44 @@ Be honest with scores - if a clip is genuinely just normal action, that's fine. 
             "-preset", "ultrafast",
             "-crf", "30",
             "-c:a", "aac", "-b:a", "32k", "-ac", "1",
-            str(temp_proxy)
+            str(temp_proxy_part)
         ]
 
+        # 1. Check if cached proxy exists AND validate duration
+        cached_valid = False
         if temp_proxy.exists() and temp_proxy.stat().st_size > 1024:
-            logging.info(f"Using cached proxy: {temp_proxy}")
-        else:
+            try:
+                probe_res = subprocess.run([
+                    "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1", str(temp_proxy)
+                ], capture_output=True, text=True)
+                proxy_dur = float(probe_res.stdout.strip()) if probe_res.stdout.strip() else 0.0
+                if duration > 0 and abs(proxy_dur - duration) > max(10.0, duration * 0.05):
+                    logging.warning(
+                        f"⚠️ Cached proxy duration mismatch ({proxy_dur:.1f}s vs expected {duration:.1f}s). "
+                        f"Deleting incomplete proxy cache..."
+                    )
+                    temp_proxy.unlink(missing_ok=True)
+                else:
+                    cached_valid = True
+                    logging.info(f"Using cached proxy: {temp_proxy} (Duration: {proxy_dur:.1f}s)")
+            except Exception as e:
+                logging.warning(f"Failed to probe cached proxy ({e}). Deleting cache...")
+                temp_proxy.unlink(missing_ok=True)
+
+        if not cached_valid:
             logging.info(f"Generating low-res proxy for AI analysis: {temp_proxy}")
-            import time
+            temp_proxy_part.unlink(missing_ok=True)
             from tqdm import tqdm
             import re
             
-            # Helper to get video duration
-            def get_duration(path):
-                try:
-                    res = subprocess.run([
-                        "ffprobe", "-v", "error", "-show_entries", "format=duration", 
-                        "-of", "default=noprint_wrappers=1:nokey=1", str(path)
-                    ], capture_output=True, text=True)
-                    return float(res.stdout.strip())
-                except:
-                    return 0
-            
-            total_duration = get_duration(video_path)
-            
+            total_duration = duration if duration > 0 else 0.0
             start_time = time.time()
-            # RegEx to capture time=HH:MM:SS.mm
             time_pattern = re.compile(r"time=(\d{2}):(\d{2}):(\d{2}\.\d{2})")
             
             # Try GPU first with progress
             try:
-                # Add -progress pipe:1 to get progress info on stdout/stderr
-                # But typically reading stderr for `time=` is easier/cross-platform compatible
                 cmd = gpu_cmd
-                
                 logging.info(f"Rendering proxy with GPU (Duration: {total_duration:.1f}s)...")
                 
                 process = subprocess.Popen(
@@ -637,7 +645,6 @@ Be honest with scores - if a clip is genuinely just normal action, that's fine. 
                     universal_newlines=True
                 )
                 
-                # Progress bar
                 pbar = tqdm(total=total_duration, unit="s", desc="Generating Proxy", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}s [{elapsed}<{remaining}]")
                 
                 for line in process.stderr:
@@ -659,7 +666,6 @@ Be honest with scores - if a clip is genuinely just normal action, that's fine. 
                 
             except (subprocess.CalledProcessError, FileNotFoundError, Exception) as e:
                 logging.warning(f"GPU proxy generation failed ({e}), falling back to CPU...")
-                # Fallback to CPU with progress
                 try:
                     cmd = cpu_cmd
                     process = subprocess.Popen(
@@ -689,7 +695,12 @@ Be honest with scores - if a clip is genuinely just normal action, that's fine. 
                     
                 except subprocess.CalledProcessError as e:
                     logging.error(f"Failed to generate proxy video: {e}")
+                    temp_proxy_part.unlink(missing_ok=True)
                     return []
+
+            # Atomically rename complete .part.mp4 to .mp4
+            if temp_proxy_part.exists():
+                temp_proxy_part.replace(temp_proxy)
 
         # 2. Upload to Gemini
         client = self._get_client()
@@ -824,14 +835,8 @@ JSON FORMAT:
                     client.files.delete(name=uploaded_file.name)
                 except:
                     pass
-            # Don't delete cached proxy to speed up re-runs? 
-            # Ideally we should clean it up, but for dev speed let's keep it if small?
-            # No, let's clean up to avoid filling /tmp
-            if temp_proxy.exists():
-                try:
-                    temp_proxy.unlink()
-                except:
-                    pass
+            # Keep cached proxy file to speed up subsequent re-runs on the same video
+            pass
 
 
 
