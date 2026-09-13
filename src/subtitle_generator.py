@@ -579,27 +579,27 @@ def get_caption_style() -> str:
     """Get the configured AI caption style.
     
     Returns:
-        One of: "gaming", "dramatic", "funny", "minimal"
+        A caption style key from content_types, or "auto" (the default, matching
+        ``.env.example`` and the story-mode check in ``shorts.py``).
     """
-    return os.getenv("CAPTION_STYLE", "gaming").lower()
+    return os.getenv("CAPTION_STYLE", "auto").strip().lower() or "auto"
 
-VIDEO_TYPE_DEFAULT_CAPTION_STYLE = {
-    "gaming": "gaming",
-    "podcasts": "podcast_quote",
-    "entertainment": "entertainment_reaction",
-    "sports": "sports_playbyplay",
-    "vlogs": "vlog_story",
-    "tv_shows": "tv_recap",
-    "documentaries": "documentary_insight",
-    "music": "music_hype",
-    "educational": "educational_explainer",
-    "interviews": "interview_quote",
-    "comedy": "comedy_punchline",
-    "news_commentary": "news_breaking",
-    "esports": "esports_playcast",
-    "cooking_diy": "cooking_step",
-    "fitness": "fitness_coach",
-}
+
+def resolve_clip_caption_style(caption_style: str, detected_category: Optional[str]) -> str:
+    """Resolve ``auto`` against the current VIDEO_TYPE's taxonomy.
+
+    Explicit styles pass through untouched. ``auto`` maps the AI-detected
+    category via the content type's own category→style table and falls back to
+    the type's default style.
+    """
+    from content_types import get_content_type, resolve_caption_style
+
+    content_type = get_content_type()
+    resolved = resolve_caption_style(caption_style, detected_category, content_type)
+    if caption_style == "auto":
+        source = f"category: {detected_category}" if detected_category else f"VIDEO_TYPE: {content_type.key}"
+        logging.info(f"Auto-matched caption style: {resolved} (from {source})")
+    return resolved
 
 
 def generate_subtitles(
@@ -653,17 +653,7 @@ def generate_subtitles(
     # Determine caption style (for both ai_captions and TTS voice selection)
     caption_style = None
     if mode == "ai_captions":
-        caption_style = get_caption_style()
-        
-        # Auto style matching based on detected category
-        if caption_style == "auto" and detected_category:
-            from ai_providers import ClipScore
-            caption_style = ClipScore.CAPTION_STYLE_MAP.get(detected_category, "gaming")
-            logging.info(f"Auto-matched caption style: {caption_style} (from category: {detected_category})")
-        elif caption_style == "auto":
-            video_type = os.getenv("VIDEO_TYPE", "gaming").strip().lower()
-            caption_style = VIDEO_TYPE_DEFAULT_CAPTION_STYLE.get(video_type, "gaming")
-            logging.info(f"Auto-matched caption style: {caption_style} (from VIDEO_TYPE: {video_type})")
+        caption_style = resolve_clip_caption_style(get_caption_style(), detected_category)
     
     try:
         if mode == "speech":

@@ -1,6 +1,7 @@
 """Utility for automatically generating short video clips using GPU acceleration.
 
-This module processes gameplay videos and creates resized clips
+This module processes long-form videos (gaming, podcasts, sports, and any
+other VIDEO_TYPE from ``content_types``) and creates resized clips
 that fit common short-video aspect ratios. It leverages NVIDIA GPU
 (CUDA) for scene detection, audio/video analysis, image filtering,
 and video encoding to maximize performance.
@@ -51,6 +52,7 @@ from decord import VideoReader, cpu, gpu
 from tqdm import tqdm
 
 # AI Provider and Subtitle modules
+import content_types
 from ai_providers import (
     get_analyzer,
     ClipScore,
@@ -205,7 +207,7 @@ def _get_debug_rendered_clips() -> Optional[List[Tuple[Path, str]]]:
         if ":" in item:
             path_str, category = item.rsplit(":", 1)
         else:
-            path_str, category = item, "action"
+            path_str, category = item, _default_category()
         
         path = Path(path_str)
         if path.exists():
@@ -1695,17 +1697,27 @@ def _get_ai_config() -> Tuple[bool, int, int]:
 
 def get_video_type() -> str:
     """Get normalized video type from environment."""
-    return os.getenv("VIDEO_TYPE", "gaming").strip().lower()
+    return content_types.get_video_type()
+
+
+def _default_category() -> str:
+    """Neutral category for clips the AI never labelled (first in the taxonomy)."""
+    return next(iter(content_types.get_content_type().semantic_types))
 
 
 def should_bypass_heuristic_prefilter(
     ai_provider: Optional[str] = None,
     video_type: Optional[str] = None,
 ) -> bool:
-    """Whether heuristic-first candidate prefilter should be skipped."""
+    """Whether heuristic-first candidate prefilter should be skipped.
+
+    Action heuristics (scene cuts + audio/motion peaks) only make sense for
+    gaming-style footage. Every other content type is AI-first, which requires
+    a cloud provider capable of judging arbitrary candidates.
+    """
     provider = (ai_provider or os.getenv("AI_PROVIDER", "openai")).strip().lower()
-    vtype = (video_type or get_video_type()).strip().lower()
-    return provider in {"gemini", "openai"} and vtype != "gaming"
+    content_type = content_types.get_content_type(video_type)
+    return provider in {"gemini", "openai"} and not content_type.uses_action_heuristics
 
 
 def rank_scenes_with_ai(
@@ -1955,7 +1967,7 @@ def rank_scenes_with_ai(
                 clip.ai_score = 0.95 # High trust
                 clip.reason = f"Identified by Gemini Deep Analysis as {clip.detected_category}"
                 # Fill category scores for completeness
-                clip.category_scores = {k: 0.1 for k in ClipScore.SEMANTIC_TYPES}
+                clip.category_scores = {k: 0.1 for k in content_types.get_content_type().semantic_types}
                 clip.category_scores[clip.detected_category] = 0.95
                 clips_already_analyzed.append(clip)
             else:
@@ -2000,7 +2012,7 @@ def rank_scenes_with_ai(
                 ranked_scenes.append((
                     scene,
                     clip_score.combined_score,
-                    clip_score.detected_category or "action"
+                    clip_score.detected_category or _default_category()
                 ))
         
         # Sort by combined score
@@ -2390,7 +2402,7 @@ def process_video(video_file: Path, config: ProcessingConfig, output_dir: Path) 
             # Track for subtitle processing with detected category and render metadata
             if render_path.exists():
                 scene_key = scene[0].get_seconds()
-                category = scene_categories.get(scene_key, "action")
+                category = scene_categories.get(scene_key, _default_category())
                 # Store render params as dict for potential TTS re-rendering
                 render_meta = {
                     "source_path": str(params.source_path),
@@ -2452,7 +2464,7 @@ def process_video(video_file: Path, config: ProcessingConfig, output_dir: Path) 
                 "bg_height": params.bg_height,
                 "is_vertical_bg": params.is_vertical_bg,
             }
-            rendered_clips.append((render_path, "action", render_meta))
+            rendered_clips.append((render_path, _default_category(), render_meta))
 
     # ==========================================================================
     # DEBUG: Save checkpoint before subtitle generation
@@ -2557,7 +2569,7 @@ def process_video(video_file: Path, config: ProcessingConfig, output_dir: Path) 
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the shorts generator."""
-    parser = argparse.ArgumentParser(description="Generate short clips from gameplay footage using GPU.")
+    parser = argparse.ArgumentParser(description="Generate short clips from long-form footage using GPU.")
     return parser.parse_args()
 
 

@@ -20,10 +20,138 @@ from typing import List, Optional, Protocol
 
 from dotenv import load_dotenv
 
+from content_types import (
+    ContentType,
+    get_content_type,
+    get_style,
+    get_voice_preset,
+    resolve_caption_style,
+)
+
 load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+
+# ---------------------------------------------------------------------------
+# Content-type aware prompt builders
+# ---------------------------------------------------------------------------
+
+# Hand-tuned guide kept for the gaming taxonomy; other types derive theirs
+# from the registry descriptions.
+_GAMING_CLASSIFICATION_GUIDE = """CLASSIFICATION GUIDE:
+- ACTION: Standard combat, shooting, fighting - the "normal" gameplay
+- FUNNY: Look for fails, glitches, ragdoll physics, unexpected humor, awkward moments
+- CLUTCH: Last-second saves, 1vX wins, comeback victories, surviving with low health
+- WTF: "Wait, what just happened?!" moments - random, unexpected, confusing events
+- EPIC_FAIL: Deaths that are embarrassing, tragic mistakes, throwing the game
+- HYPE: Celebrations, victory moments, peak excitement, "LET'S GO" energy
+- SKILL: Impressive plays - trick shots, perfect aim, smart strategies, pro-level moves"""
+
+
+def default_category(content_type: ContentType) -> str:
+    """Category used when the AI returns nothing usable (first in the taxonomy)."""
+    return next(iter(content_type.semantic_types))
+
+
+def category_descriptions(content_type: ContentType) -> str:
+    return "\n".join(
+        f"{i + 1}. {cat.upper()} - {desc}"
+        for i, (cat, desc) in enumerate(content_type.semantic_types.items())
+    )
+
+
+def category_json_skeleton(content_type: ContentType) -> str:
+    return ", ".join(f'"{cat}": 0.5' for cat in content_type.semantic_types)
+
+
+def _classification_guide(content_type: ContentType) -> str:
+    if content_type.family == "gaming":
+        return _GAMING_CLASSIFICATION_GUIDE
+    return f"""LOOK FOR: {content_type.analysis_focus}.
+DISCOUNT: {content_type.analysis_ignore}."""
+
+
+def build_clip_classification_prompt(content_type: ContentType, source: str = "video") -> str:
+    """Prompt asking the model to score one clip against the type's taxonomy.
+
+    ``source`` is ``"video"`` (Gemini gets the clip itself) or ``"keyframes"``
+    (OpenAI gets sampled frames).
+    """
+    noun = content_type.clip_noun
+    if source == "keyframes":
+        opener = f"These are keyframes from a {noun} video clip. Analyze and classify into the BEST matching category."
+    else:
+        opener = f"Analyze this {noun} video clip and classify it into the BEST matching category."
+
+    baseline = default_category(content_type)
+    if content_type.family == "gaming":
+        special = 'Ask yourself: What makes this clip SPECIAL? Is it just normal action, or is there something MORE?'
+        honesty = ('Be honest with scores - if a clip is genuinely just normal action, that\'s fine. '
+                   'But if there\'s humor, skill, or a WTF moment, IDENTIFY IT!')
+    else:
+        special = 'Ask yourself: What makes this moment SPECIAL enough to stand alone as a short?'
+        honesty = ('Be honest with scores - an unremarkable stretch should score low everywhere. '
+                   'But if a moment stands out, IDENTIFY IT!')
+
+    return f"""{opener}
+
+IMPORTANT: Be specific! Don't default to "{baseline}" - carefully consider ALL categories:
+
+CATEGORIES:
+{category_descriptions(content_type)}
+
+{_classification_guide(content_type)}
+
+{special}
+
+Respond with ONLY valid JSON (score each category 0.0-1.0):
+{{{category_json_skeleton(content_type)}, "best_category": "{baseline}", "reason": "Why this clip fits the selected category"}}
+
+{honesty}"""
+
+
+def build_deep_analysis_prompt(content_type: ContentType, target_count: int) -> str:
+    """Prompt for Gemini Deep Analysis over the whole source video."""
+    cats = list(content_type.semantic_types)
+    cat_a = cats[min(1, len(cats) - 1)]
+    cat_b = cats[-1]
+    if content_type.family == "gaming":
+        example_a = f'{{ "start": "04:20", "end": "04:50", "category": "{cat_a}", "score": 0.95, "reason": "Streamer laughs at glitch" }}'
+        example_b = f'{{ "start": "12:15", "end": "12:45", "category": "{cat_b}", "score": 0.88, "reason": "Triple kill" }}'
+    else:
+        example_a = f'{{ "start": "04:20", "end": "04:50", "category": "{cat_a}", "score": 0.95, "reason": "Why this {content_type.clip_noun} moment is a standout {cat_a}" }}'
+        example_b = f'{{ "start": "12:15", "end": "12:45", "category": "{cat_b}", "score": 0.88, "reason": "Why this moment is a strong {cat_b}" }}'
+
+    categories_list = "\n".join(f"- {cat.upper()}: {desc}" for cat, desc in content_type.semantic_types.items())
+
+    return f"""You are a professional video editor creating viral shorts from {content_type.clip_noun} footage.
+Your task is to watch this entire video and identify the ABSOLUTE BEST moments.
+
+CATEGORIES:
+{categories_list}
+
+INSTRUCTIONS:
+1. Find {target_count} distinct, high-quality moments.
+2. For each moment, provide the EXACT start and end timestamps (MM:SS).
+3. Assign a 'score' (0.0 to 1.0) based on how viral/engaging it is.
+4. Assign a 'category' from the list above.
+
+IMPORTANT:
+- Focus on moments that stand out ({content_type.analysis_focus}).
+- Ignore {content_type.analysis_ignore}.
+- Clips should be 15-60 seconds long.
+- Return ONLY valid JSON.
+
+JSON FORMAT:
+{{
+    "moments": [
+        {example_a},
+        {example_b}
+    ]
+}}
+"""
 
 
 @dataclass
@@ -287,12 +415,15 @@ personality: Wise, commanding, magnetic storyteller presence.""",
     
     @property
     def caption_style(self) -> str:
-        """Get the appropriate caption style based on detected category."""
-        return self.CAPTION_STYLE_MAP.get(self.detected_category, "gaming")
+        """Caption style for the detected category under the current VIDEO_TYPE."""
+        return resolve_caption_style("auto", self.detected_category)
     
     @property
     def voice_preset(self) -> str:
-        """Get the fallback voice preset based on detected category."""
+        """Voice preset for the resolved caption style (gaming presets as fallback)."""
+        preset = get_voice_preset(self.caption_style)
+        if preset:
+            return preset
         return self.VOICE_PRESET_MAP.get(self.detected_category, self.VOICE_PRESET_MAP["action"])
 
 
@@ -370,12 +501,9 @@ class GeminiAnalyzer(SemanticAnalyzer):
         
         client = self._get_client()
         
-        # Build category descriptions from ClipScore
-        categories_desc = "\n".join(
-            f"{i+1}. {cat.upper()} - {desc}"
-            for i, (cat, desc) in enumerate(ClipScore.SEMANTIC_TYPES.items())
-        )
-        categories_json = ", ".join(f'"{cat}": 0.5' for cat in ClipScore.SEMANTIC_TYPES.keys())
+        content_type = get_content_type()
+        prompt = build_clip_classification_prompt(content_type, source="video")
+        fallback_category = default_category(content_type)
         
         results = []
         
@@ -431,29 +559,6 @@ class GeminiAnalyzer(SemanticAnalyzer):
                 # Small delay for stability
                 time.sleep(0.5)
                 
-                prompt = f"""Analyze this gameplay video clip and classify it into the BEST matching category.
-
-IMPORTANT: Be specific! Don't default to "action" - carefully consider ALL categories:
-
-CATEGORIES:
-{categories_desc}
-
-CLASSIFICATION GUIDE:
-- ACTION: Standard combat, shooting, fighting - the "normal" gameplay
-- FUNNY: Look for fails, glitches, ragdoll physics, unexpected humor, awkward moments
-- CLUTCH: Last-second saves, 1vX wins, comeback victories, surviving with low health
-- WTF: "Wait, what just happened?!" moments - random, unexpected, confusing events
-- EPIC_FAIL: Deaths that are embarrassing, tragic mistakes, throwing the game
-- HYPE: Celebrations, victory moments, peak excitement, "LET'S GO" energy
-- SKILL: Impressive plays - trick shots, perfect aim, smart strategies, pro-level moves
-
-Ask yourself: What makes this clip SPECIAL? Is it just normal action, or is there something MORE?
-
-Respond with ONLY valid JSON (score each category 0.0-1.0):
-{{{categories_json}, "best_category": "action", "reason": "Why this clip fits the selected category"}}
-
-Be honest with scores - if a clip is genuinely just normal action, that's fine. But if there's humor, skill, or a WTF moment, IDENTIFY IT!"""
-                
                 # Retry logic for generate_content
                 max_retries = 3
                 response = None
@@ -484,7 +589,7 @@ Be honest with scores - if a clip is genuinely just normal action, that's fine. 
                     # Parse scores for all semantic types
                     clip_info.category_scores = {
                         cat: float(data.get(cat, 0.5))
-                        for cat in ClipScore.SEMANTIC_TYPES.keys()
+                        for cat in content_type.semantic_types
                     }
                     best_cat = data.get("best_category", "").lower()
                     if best_cat not in clip_info.category_scores:
@@ -497,7 +602,7 @@ Be honest with scores - if a clip is genuinely just normal action, that's fine. 
                     logging.warning(f"Failed to parse Gemini response: {response_text[:100]}")
                     clip_info.ai_score = 0.5
                     clip_info.reason = "Parse error"
-                    clip_info.detected_category = "action"
+                    clip_info.detected_category = fallback_category
                 
                 try:
                     client.files.delete(name=video_file.name)
@@ -726,37 +831,8 @@ Be honest with scores - if a clip is genuinely just normal action, that's fine. 
             logging.info("Proxy processing complete. Prompting Gemini...")
 
             # 3. Prompt for timestamps
-            categories_list = "\n".join(
-                f"- {cat.upper()}: {desc}" 
-                for cat, desc in ClipScore.SEMANTIC_TYPES.items()
-            )
-
-            prompt = f"""You are a professional video editor creating viral shorts.
-Your task is to watch this entire video and identify the ABSOLUTE BEST moments.
-
-CATEGORIES:
-{categories_list}
-
-INSTRUCTIONS:
-1. Find {target_count} distinct, high-quality moments.
-2. For each moment, provide the EXACT start and end timestamps (MM:SS).
-3. Assign a 'score' (0.0 to 1.0) based on how viral/engaging it is.
-4. Assign a 'category' from the list above.
-
-IMPORTANT:
-- Focus on moments that stand out (kills, funny fails, laughs, glitches, hypes).
-- Ignore boring travel or looting.
-- Clips should be 15-60 seconds long.
-- Return ONLY valid JSON.
-
-JSON FORMAT:
-{{
-    "moments": [
-        {{ "start": "04:20", "end": "04:50", "category": "funny", "score": 0.95, "reason": "Streamer laughs at glitch" }},
-        {{ "start": "12:15", "end": "12:45", "category": "skill", "score": 0.88, "reason": "Triple kill" }}
-    ]
-}}
-"""
+            content_type = get_content_type()
+            prompt = build_deep_analysis_prompt(content_type, target_count)
             # Use client.models.generate_content instead of client.GenerativeModel
             from google.api_core import exceptions
             
@@ -813,10 +889,13 @@ JSON FORMAT:
                     end_sec = time_str_to_seconds(end_str)
                     
                     if end_sec > start_sec:
+                        category = str(m.get("category", "")).strip().lower()
+                        if category not in content_type.semantic_types:
+                            category = default_category(content_type)
                         parsed_moments.append((
                             float(start_sec),
                             float(end_sec),
-                            m["category"].lower(),
+                            category,
                             float(m["score"])
                         ))
                 except Exception as e:
@@ -912,12 +991,9 @@ class OpenAIAnalyzer(SemanticAnalyzer):
         
         client = self._get_client()
         
-        # Build category descriptions from ClipScore
-        categories_desc = "\n".join(
-            f"{i+1}. {cat.upper()} - {desc}"
-            for i, (cat, desc) in enumerate(ClipScore.SEMANTIC_TYPES.items())
-        )
-        categories_json = ", ".join(f'"{cat}": 0.5' for cat in ClipScore.SEMANTIC_TYPES.keys())
+        content_type = get_content_type()
+        prompt_text = build_clip_classification_prompt(content_type, source="keyframes")
+        fallback_category = default_category(content_type)
         
         results = []
         
@@ -935,31 +1011,8 @@ class OpenAIAnalyzer(SemanticAnalyzer):
                     logging.warning(f"No frames extracted from {clip_info.clip_path}")
                     clip_info.ai_score = 0.5
                     clip_info.reason = "No frames extracted"
-                    clip_info.detected_category = "action"
+                    clip_info.detected_category = fallback_category
                     return clip_info
-                
-                prompt_text = f"""These are keyframes from a gameplay video clip. Analyze and classify into the BEST matching category.
-
-IMPORTANT: Be specific! Don't default to "action" - carefully consider ALL categories:
-
-CATEGORIES:
-{categories_desc}
-
-CLASSIFICATION GUIDE:
-- ACTION: Standard combat, shooting, fighting - the "normal" gameplay
-- FUNNY: Look for fails, glitches, ragdoll physics, unexpected humor, awkward moments
-- CLUTCH: Last-second saves, 1vX wins, comeback victories, surviving with low health
-- WTF: "Wait, what just happened?!" moments - random, unexpected, confusing events
-- EPIC_FAIL: Deaths that are embarrassing, tragic mistakes, throwing the game
-- HYPE: Celebrations, victory moments, peak excitement, "LET'S GO" energy
-- SKILL: Impressive plays - trick shots, perfect aim, smart strategies, pro-level moves
-
-Ask yourself: What makes this clip SPECIAL? Is it just normal action, or is there something MORE?
-
-Respond with ONLY valid JSON (score each category 0.0-1.0):
-{{{categories_json}, "best_category": "action", "reason": "Why this clip fits the selected category"}}
-
-Be honest with scores - if genuinely just normal action, that's fine. But if there's humor, skill, or a WTF moment, IDENTIFY IT!"""
                 
                 # Build message with images
                 content = [{"type": "text", "text": prompt_text}]
@@ -993,7 +1046,7 @@ Be honest with scores - if genuinely just normal action, that's fine. But if the
                     # Parse scores for all semantic types
                     clip_info.category_scores = {
                         cat: float(data.get(cat, 0.5))
-                        for cat in ClipScore.SEMANTIC_TYPES.keys()
+                        for cat in content_type.semantic_types
                     }
                     best_cat = data.get("best_category", "").lower()
                     if best_cat not in clip_info.category_scores:
@@ -1006,7 +1059,7 @@ Be honest with scores - if genuinely just normal action, that's fine. But if the
                     logging.warning(f"Failed to parse OpenAI response: {response_text[:100]}")
                     clip_info.ai_score = 0.5
                     clip_info.reason = "Parse error"
-                    clip_info.detected_category = "action"
+                    clip_info.detected_category = fallback_category
                 
                 return clip_info
 
@@ -1014,7 +1067,7 @@ Be honest with scores - if genuinely just normal action, that's fine. But if the
                 logging.error(f"Error analyzing clip {clip_info.clip_path.name}: {e}")
                 clip_info.ai_score = 0.5
                 clip_info.reason = f"Error: {str(e)[:50]}"
-                clip_info.detected_category = "action"
+                clip_info.detected_category = fallback_category
                 return clip_info
 
         # Execute in parallel
@@ -1056,11 +1109,12 @@ class LocalAnalyzer(SemanticAnalyzer):
         
         logging.info("Using local-only mode (no AI API calls)")
         
+        fallback_category = default_category(get_content_type())
         for clip_info in clip_infos:
             # Use heuristic score as AI score
             clip_info.ai_score = clip_info.heuristic_score
             clip_info.reason = "Local heuristic-based scoring"
-            clip_info.detected_category = "action"  # Default category in local mode
+            clip_info.detected_category = fallback_category  # Default category in local mode
         
         return AnalysisResult(
             clips=clip_infos,
@@ -1243,173 +1297,35 @@ def generate_ai_captions(
 
 
 def _get_caption_prompt(style: str, max_captions: int, duration: float, language: str = "en") -> str:
-    """Generate the prompt for AI caption generation."""
+    """Generate the prompt for AI caption generation.
+
+    The style guide comes from the content-type registry; unknown styles fall
+    back to the current VIDEO_TYPE's default style so a podcast never gets
+    gaming captions by accident.
+    """
     
     # Get full language name
     lang_name = LANGUAGE_NAMES.get(language, "English")
+
+    content_type = get_content_type()
+    caption_style = get_style(style) or content_type.style(content_type.default_style)
+    style_guide = caption_style.prompt_guide
     
     # Story modes use fewer but longer captions (but not as aggressively capped)
-    is_story_mode = style.startswith("story_")
+    is_story_mode = caption_style.is_story or style.startswith("story_")
     if is_story_mode:
         # Story mode: aim for ~1 caption per 6-8 seconds instead of hard cap
         # Let dynamic calculation in subtitle_generator handle the count
         max_captions = min(max_captions, max(6, int(duration / 6)))  # At least 6, or 1 per 6s
     
-    style_guides = {
-        "gaming": """Generate short, punchy captions like gaming content creators use.
-Examples: "HEADSHOT!", "clutch play incoming...", "wait for it...", "GG EZ", "POV: you're cracked"
-Keep captions 1-5 words. Use ALL CAPS for emphasis on action moments.""",
-        
-        "dramatic": """Generate dramatic, cinematic captions.
-Examples: "The final stand.", "Everything changed.", "No turning back now."
-Keep captions short and impactful. Use lowercase for tension, CAPS for climax.""",
-        
-        "funny": """Generate humorous, meme-style captions.
-Examples: "skill issue tbh", "when the plan works (it never does)", "*chuckles* I'm in danger"
-Be self-aware and slightly chaotic. Gen-Z humor welcome.""",
-        
-        "minimal": """Generate minimal, understated captions.
-Examples: "nice.", "oh.", "well then."
-Keep it subtle. Less is more. Max 3 words per caption.""",
-        
-        "genz": """Generate GenZ slang-heavy reactions and commentary.
-Examples: "bruh 💀", "no cap this is insane", "he's locked in rn", "finna go crazy", "ate and left no crumbs"
-Use modern slang naturally: bruh, no cap, finna, fr fr, ate, slay, lowkey, highkey, bussin, mid, L, W, rizz
-Keep captions 1-6 words. Be authentic to GenZ internet culture. Emojis encouraged (💀🔥😭).""",
-        
-        "story_news": """Generate professional esports broadcaster narrative.
-Examples: "And we're witnessing championship-level gameplay here.", "The positioning is absolutely impeccable.", "This could be the defining moment of the match."
-Write 2-3 sentences per caption. Professional tone, clear analysis, building excitement. Fewer captions (2-4 max) with longer text.""",
-        
-        "story_roast": """Generate sarcastic, playful roasting commentary.
-Examples: "Oh no. Oh no no no.", "Someone's definitely uninstalling after this.", "The audacity. The absolute audacity of this play."
-Write 2-3 sentences per caption. Sarcastic but not mean, comedic timing, playful mockery. Fewer captions (2-4 max).""",
-        
-        "story_creepypasta": """Generate horror-style tension narrative.
-Examples: "Something felt wrong.", "The game knew what was about to happen.", "And then... it did."
-Write 2-3 sentences per caption. Build tension, ominous tone, slow reveals. Fewer captions (2-4 max). Use ellipses for suspense.""",
-        
-        "story_dramatic": """Generate epic cinematic narration.
-Examples: "In the arena of champions, legends are born.", "The crowd holds its breath.", "One shot. One chance. Immortality awaits."
-Write 2-3 sentences per caption. Epic tone, powerful delivery, movie trailer style. Fewer captions (2-4 max).""",
-        "podcast_quote": """Generate crisp pull-quote captions from podcast moments.
-Examples: "That's the real problem.", "Clip this part.", "He actually said that."
-Keep captions concise and quotable (3-10 words). Prioritize opinionated or insightful lines.""",
-
-        "podcast_highlight": """Generate conversational podcast highlight captions.
-Examples: "This is where it gets interesting.", "Here's the key takeaway.", "Wait, that's huge."
-Use natural spoken phrasing. Keep captions 4-12 words with clear context.""",
-
-        "sports_playbyplay": """Generate energetic sports play-by-play captions.
-Examples: "HE'S THROUGH!", "LAST-SECOND FINISH!", "WHAT A COMEBACK!"
-Short, high-energy, broadcast-like. Use CAPS for peak moments.""",
-
-        "sports_hype": """Generate crowd-hype sports captions.
-Examples: "THE STADIUM ERUPTS!", "ABSOLUTE SCENES!", "GOOSEBUMPS."
-Very punchy captions (1-6 words) focused on emotion and momentum.""",
-
-        "educational_explainer": """Generate clear educational explainer captions.
-Examples: "Here's why this works.", "Step 1: isolate the variable.", "This is the core concept."
-Be concise, structured, and easy to follow. Prioritize clarity over hype.""",
-
-        "educational_aha": """Generate 'aha moment' educational captions.
-Examples: "Now it clicks.", "This changes everything.", "That's the trick."
-Highlight key insights and breakthroughs in simple language.""",
-
-        "news_breaking": """Generate urgent breaking-news style captions.
-Examples: "BREAKING UPDATE", "Developing story.", "Major reaction just in."
-Keep captions short, factual, and high-impact.""",
-
-        "news_debate": """Generate commentary/debate style captions.
-Examples: "Strong take incoming.", "This point is controversial.", "Counterargument: ..."
-Emphasize contrasting viewpoints and discussion beats.""",
-
-        "vlog_story": """Generate personal vlog storytelling captions.
-Examples: "I didn't expect this.", "Best part of the trip.", "Core memory unlocked."
-Warm, relatable tone. Keep captions 3-10 words.""",
-
-        "vlog_highlight": """Generate vlog highlight captions.
-Examples: "Peak moment.", "Worth every second.", "This made my day."
-Focus on memorable moments and emotional payoff.""",
-
-        "music_hype": """Generate concert/music hype captions.
-Examples: "THE DROP IS INSANE", "Crowd went wild.", "This hook is unreal."
-Punchy, rhythmic, high-energy captions.""",
-
-        "music_vibe": """Generate aesthetic music vibe captions.
-Examples: "Late-night energy.", "On repeat.", "Pure vibes."
-Minimal, mood-first captions (1-5 words).""",
-
-        "interview_quote": """Generate interview pull-quote captions.
-Examples: "That's a bold statement.", "He answered directly.", "Most honest line yet."
-Keep captions quotable and context-rich.""",
-
-        "interview_hot_take": """Generate hot-take interview captions.
-Examples: "This will spark debate.", "Unfiltered opinion.", "People won't agree on this."
-Emphasize controversy and reaction-worthy moments.""",
-
-        "comedy_punchline": """Generate comedy punchline captions.
-Examples: "AND THAT'S THE JOKE.", "Perfect timing.", "Crowd lost it."
-Prioritize setup/payoff rhythm and punchline emphasis.""",
-
-        "comedy_reaction": """Generate crowd/reaction comedy captions.
-Examples: "He can't keep a straight face.", "Everyone's dying laughing.", "That landed."
-Focus on reactions, laughter, and comedic aftermath.""",
-
-        "cooking_step": """Generate cooking/DIY step captions.
-Examples: "Step 2: fold gently.", "Don't overmix here.", "Now plate it."
-Instructional and clear, with practical guidance.""",
-
-        "cooking_reveal": """Generate cooking/DIY reveal captions.
-Examples: "Final reveal.", "Before vs after.", "This turned out incredible."
-Highlight transformation moments and satisfying results.""",
-
-        "fitness_coach": """Generate coaching-style fitness captions.
-Examples: "Keep your core tight.", "Drive through the heels.", "Control the tempo."
-Actionable form cues in concise language.""",
-
-        "fitness_motivation": """Generate motivational fitness captions.
-Examples: "One more rep.", "No excuses today.", "Progress over perfection."
-Short, motivating captions with high intent.""",
-
-        "entertainment_reaction": """Generate entertainment reaction captions.
-Examples: "I DID NOT SEE THAT COMING.", "That scene was wild.", "What a twist."
-Focus on emotional reactions and surprise moments.""",
-
-        "entertainment_recap": """Generate entertainment recap captions.
-Examples: "Quick recap:", "Here's what happened.", "Key moment right here."
-Summarize important scenes clearly and briefly.""",
-
-        "tv_recap": """Generate TV show recap captions.
-Examples: "Episode turning point.", "Character arc shift.", "Big reveal."
-Concise narrative recap with context.""",
-
-        "tv_dramatic": """Generate dramatic TV-style captions.
-Examples: "No one was ready for this.", "Everything changes now.", "The tension is unreal."
-Build tension and cliffhanger energy.""",
-
-        "documentary_insight": """Generate documentary insight captions.
-Examples: "Key insight:", "This explains the pattern.", "The data tells a story."
-Informative, thoughtful, and precise.""",
-
-        "documentary_wonder": """Generate documentary wonder captions.
-Examples: "Nature at full scale.", "Hard to believe this is real.", "A rare moment captured."
-Emphasize awe, discovery, and visual spectacle.""",
-
-        "esports_playcast": """Generate esports caster-style captions.
-Examples: "TEAMFIGHT NOW!", "Perfect timing on the engage.", "Objective secured."
-Fast-paced esports broadcast tone with tactical callouts.""",
-
-        "esports_clutch": """Generate esports clutch-moment captions.
-Examples: "1v3. No fear.", "Ice-cold decision making.", "CLUTCH FACTOR."
-High-tension competitive style, short and intense."""
-    }
-    
-    style_guide = style_guides.get(style, style_guides["gaming"])
-    
     # Adjust caption duration guidance for story modes
     caption_duration = "4-8 seconds" if is_story_mode else "1-3 seconds"
     caption_type = "narrative segments" if is_story_mode else "short captions"
+
+    if content_type.family == "gaming":
+        focus_rule = "Focus on action moments, close calls, achievements, or funny situations"
+    else:
+        focus_rule = f"Focus on {content_type.analysis_focus}"
     
     # Language instruction
     if language != "en":
@@ -1421,7 +1337,7 @@ High-tension competitive style, short and intense."""
     else:
         language_instruction = ""
     
-    return f"""Watch this gameplay video and generate {max_captions} {caption_type} for key moments.
+    return f"""Watch this {content_type.clip_noun} video and generate {max_captions} {caption_type} for key moments.
 
 STYLE GUIDE:
 {style_guide}{language_instruction}
@@ -1431,7 +1347,7 @@ VIDEO DURATION: {duration:.1f} seconds
 RULES:
 1. Space captions throughout the video (not all at the start)
 2. Each caption should appear for {caption_duration}
-3. Focus on action moments, close calls, achievements, or funny situations
+3. {focus_rule}
 4. Captions should enhance the viewing experience, not describe obvious actions
 
 Respond with ONLY valid JSON object:
@@ -1819,58 +1735,27 @@ class SemanticTagResult:
     error: str = ""
 
 
+def describe_tagging_context(category: str = "") -> str:
+    """Human-readable description of what the captions are about.
+
+    ``category`` may be a caption style key, an AI-detected semantic category
+    of the current VIDEO_TYPE, or empty. Anything else falls back to the
+    content type's own description.
+    """
+    content_type = get_content_type()
+    key = (category or "").strip().lower()
+    if key in content_type.semantic_types:
+        return f"{content_type.label} content, {key} moment: {content_type.semantic_types[key]}"
+    style = get_style(key)
+    if style is not None:
+        return f"{content_type.label} content with {style.label} captions ({style.blurb}); {content_type.description}"
+    return f"{content_type.label} content: {content_type.description}"
+
+
 def get_semantic_tagging_prompt(text: str, category: str = "gaming") -> str:
     """Generate prompt for semantic tagging based on content category."""
     
-    category_context = {
-        "gaming": "gaming/esports content with action, kills, victories, fails",
-        "funny": "comedy content with punchlines, fails, unexpected moments", 
-        "dramatic": "dramatic/cinematic content with tension, reveals, climax",
-        "action": "action-packed content with intense moments, combat, speed",
-        "podcasts": "podcast conversations with speaker turns, memorable quotes, and strong opinions",
-        "entertainment": "movie or tv reaction content with emotional beats and memorable scenes",
-        "sports": "sports content with clutch plays, goals, finishes, and crowd reactions",
-        "vlogs": "vlog storytelling content with highlights and personal moments",
-        "tv_shows": "tv show recap content with dramatic reveals and funny cuts",
-        "documentaries": "documentary content with key insights and visual spectacle moments",
-        "music": "music and concert content with drops, choruses, and audience energy",
-        "educational": "educational explainer content with clear key takeaways and aha moments",
-        "interviews": "interview content with quotable lines, reactions, and hot takes",
-        "comedy": "comedy content with setup and punchline timing",
-        "news_commentary": "news and commentary content with breaking moments and debates",
-        "cooking_diy": "cooking and diy content with transformation reveals and actionable tips",
-        "fitness": "fitness content with form cues, personal records, and motivation",
-    }
-
-    normalized_category = category
-    if category.startswith("podcast_"):
-        normalized_category = "podcasts"
-    elif category.startswith("sports_"):
-        normalized_category = "sports"
-    elif category.startswith("educational_"):
-        normalized_category = "educational"
-    elif category.startswith("interview_"):
-        normalized_category = "interviews"
-    elif category.startswith("news_"):
-        normalized_category = "news_commentary"
-    elif category.startswith("vlog_"):
-        normalized_category = "vlogs"
-    elif category.startswith("music_"):
-        normalized_category = "music"
-    elif category.startswith("comedy_"):
-        normalized_category = "comedy"
-    elif category.startswith("cooking_"):
-        normalized_category = "cooking_diy"
-    elif category.startswith("fitness_"):
-        normalized_category = "fitness"
-    elif category.startswith("tv_"):
-        normalized_category = "tv_shows"
-    elif category.startswith("documentary_"):
-        normalized_category = "documentaries"
-    elif category.startswith("entertainment_"):
-        normalized_category = "entertainment"
-    
-    context = category_context.get(normalized_category, category_context["gaming"])
+    context = describe_tagging_context(category)
     
     return f"""Analyze this text from a video caption and tag words for styling.
     
@@ -2080,7 +1965,7 @@ def batch_tag_captions(
 CAPTIONS:
 {all_text}
 
-CONTENT TYPE: {category} content
+CONTENT TYPE: {describe_tagging_context(category)}
 
 For each caption, identify:
 - action: Action words (verbs, combat, movement)

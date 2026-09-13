@@ -191,21 +191,21 @@ cp .env.example .env
 | Category | Variable | Description |
 | :--- | :--- | :--- |
 | **AI Provider** | `AI_PROVIDER` | `openai`, `gemini`, or `local` (heuristic-only, no API) |
-| | `VIDEO_TYPE` | Content type preset (`gaming`, `podcasts`, `sports`, `educational`, etc.) used for universal clipping + caption style defaults |
+| | `VIDEO_TYPE` | Content type preset — one of `gaming`, `esports`, `podcasts`, `interviews`, `news_commentary`, `entertainment`, `tv_shows`, `comedy`, `music`, `vlogs`, `cooking_diy`, `fitness`, `educational`, `documentaries`, `sports`. Drives the analysis taxonomy/prompts, the heuristic-vs-AI-first selection strategy, and `CAPTION_STYLE=auto` defaults (see `src/content_types.py`) |
 | | `AI_ANALYSIS_ENABLED` | Enable/disable AI scene analysis |
 | | `GEMINI_DEEP_ANALYSIS` | Gemini-only: upload full video for smarter scene detection (slower initial upload, better results) |
 | | `OPENAI_MODEL` | Model for analysis (e.g., `gpt-5-mini`) |
 | | `AI_SCORE_WEIGHT` | How much to weight AI vs heuristic (0.0-1.0) |
-| **Semantic Analysis** | `SEMANTIC_TYPES` | All 7 types analyzed: `action`, `funny`, `clutch`, `wtf`, `epic_fail`, `hype`, `skill` |
+| **Semantic Analysis** | *(per `VIDEO_TYPE`)* | Each content type has its own moment taxonomy — gaming: `action`, `funny`, `clutch`, `wtf`, `epic_fail`, `hype`, `skill`; podcasts: `quote`, `insight`, `debate`, `funny`, `story`, `revelation`; etc. |
 | | `CANDIDATE_CLIP_COUNT` | Number of clips to analyze |
 | **Subtitles** | `ENABLE_SUBTITLES` | Enable subtitle generation |
 | | `SUBTITLE_MODE` | `speech` (Whisper), `ai_captions`, or `none` |
-| | `CAPTION_STYLE` | Gaming styles + story/genz + universal styles like `podcast_quote`, `sports_playbyplay`, `educational_explainer`, `news_breaking`, or `auto` |
+| | `CAPTION_STYLE` | `auto` (AI-detected category → the content type's matching style) or an explicit style key. Gaming: `gaming`, `dramatic`, `funny`, `minimal`, `genz`, `story_news`, `story_roast`, `story_creepypasta`, `story_dramatic`; other types expose their own curated styles (e.g. `podcast_quote`, `sports_playbyplay`, `educational_explainer`, `news_breaking`) |
 | | `PYCAPS_TEMPLATE` | Visual template for captions |
 | **TTS Voiceover** | `ENABLE_TTS` | Enable Qwen3-TTS voiceover |
 | | `TTS_LANGUAGE` | Language code (`en`, `zh`, `ja`, `ko`, `de`, `fr`, `ru`, `pt`, `es`, `it`) |
 | | `TTS_VOICE_DESCRIPTION` | Natural language voice description (auto-generated if empty) |
-| | `TTS_GAME_AUDIO_VOLUME` | Game audio volume when TTS plays (0.0-1.0, default 0.3) |
+| | `TTS_GAME_AUDIO_VOLUME` | Original audio volume when TTS plays (0.0-1.0, default 0.3) |
 | | `TTS_VOICEOVER_VOLUME` | TTS voiceover volume (0.0-1.0, default 1.0) |
 | **Video Output** | `TARGET_RATIO_W/H` | Aspect ratio (default 9:16) |
 | | `SCENE_LIMIT` | Max clips per source video |
