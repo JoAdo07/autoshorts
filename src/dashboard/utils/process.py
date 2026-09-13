@@ -4,7 +4,16 @@ import select
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Mapping, Optional
+
+
+def build_process_env(
+    values: Mapping[str, object],
+    extras: Mapping[str, object],
+    base_env: Mapping[str, str],
+) -> dict[str, str]:
+    """Overlay saved configuration on the parent environment, extras last."""
+    return {**base_env, **{key: str(value) for key, value in {**values, **extras}.items()}}
 
 
 @dataclass

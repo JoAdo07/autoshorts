@@ -75,13 +75,13 @@ def main() -> None:
                     <span class="feature-pill">📊 Smart Ranking</span>
                     <span class="feature-pill">⏱️ Auto-Cuts</span>
                 </div>
-                <p style="font-size: 0.9rem; color: #94A3B8; margin-bottom: 0.5rem;">Automatically detects 7 semantic highlight types:</p>
+                <p style="font-size: 0.9rem; color: #94A3B8; margin-bottom: 0.5rem;">Finds moments that matter across 15 content types:</p>
                 <div>
-                    <span class="feature-pill" style="border-color: #F87171; background: rgba(248, 113, 113, 0.1);">🔥 Action</span>
-                    <span class="feature-pill" style="border-color: #FBBF24; background: rgba(251, 191, 36, 0.1);">😂 Funny</span>
-                    <span class="feature-pill" style="border-color: #34D399; background: rgba(52, 211, 153, 0.1);">🏆 Clutch</span>
-                    <span class="feature-pill">🤨 WTF</span>
-                    <span class="feature-pill">💀 Fail</span>
+                    <span class="feature-pill">🎙️ Quotes & Insights</span>
+                    <span class="feature-pill">⚽ Scores & Skill</span>
+                    <span class="feature-pill">🍳 Tips & Reveals</span>
+                    <span class="feature-pill">📚 Aha Moments</span>
+                    <span class="feature-pill">🎮 Gaming Highlights</span>
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -100,10 +100,10 @@ def main() -> None:
                 <p style="font-size: 0.9rem; color: #94A3B8; margin-bottom: 0.5rem;">Dynamic styles for every mood:</p>
                 <div>
                     <span class="feature-pill">🎮 Gaming</span>
-                    <span class="feature-pill">📢 News</span>
+                    <span class="feature-pill">🎙️ Pull Quote</span>
                     <span class="feature-pill">📖 Story</span>
-                    <span class="feature-pill">🔥 Roast</span>
-                    <span class="feature-pill">👻 Horror</span>
+                    <span class="feature-pill">📚 Explainer</span>
+                    <span class="feature-pill">⚽ Play-by-Play</span>
                 </div>
             </div>
         """, unsafe_allow_html=True)

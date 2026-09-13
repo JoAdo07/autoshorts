@@ -113,11 +113,11 @@ def render() -> None:
     st.markdown("""
         <div class="page-header">
             <h1>📁 Browse Files</h1>
-            <p>View and manage your gameplay and generated clips</p>
+            <p>View and manage your source videos and generated clips</p>
         </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2 = st.tabs(["🎬 Generated Clips", "🎮 Gameplay Videos"])
+    tab1, tab2 = st.tabs(["🎬 Generated Clips", "📁 Source Videos"])
     
     with tab1:
         generated_videos = list_videos(Path("generated"))
