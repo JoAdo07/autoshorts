@@ -64,6 +64,19 @@ def get_schema() -> List[EnvSection]:
             fields=[
                 EnvField("AI_PROVIDER", "AI provider", "select", "openai", options=["openai", "gemini", "local"],
                          help_text="Which AI service to use for scene analysis"),
+                EnvField(
+                    "VIDEO_TYPE",
+                    "Video type",
+                    "select",
+                    "gaming",
+                    options=[
+                        "gaming", "podcasts", "entertainment", "sports", "vlogs",
+                        "tv_shows", "documentaries", "music", "educational",
+                        "interviews", "comedy", "news_commentary", "esports",
+                        "cooking_diy", "fitness",
+                    ],
+                    help_text="Primary source content category used for AI clipping strategy and caption style presets",
+                ),
                 EnvField("AI_ANALYSIS_ENABLED", "AI analysis enabled", "bool", True,
                          help_text="Use AI to rank scenes by content quality. Disable for faster but less smart selection"),
                 EnvField("GEMINI_API_KEY", "Gemini API key", "password", "",
@@ -137,11 +150,11 @@ def get_schema() -> List[EnvSection]:
                     "Voice description override",
                     "text",
                     "",
-                    help_text="Custom voice style (e.g. 'energetic male gamer'). Leave blank for auto",
+                    help_text="Custom voice style (e.g. 'warm conversational narrator'). Leave blank for auto",
                     multiline=True,
                 ),
-                EnvField("TTS_GAME_AUDIO_VOLUME", "Game audio volume", "float", 0.3, min_value=0.0, max_value=1.0, step=0.05,
-                         help_text="How loud the original game audio is when voiceover plays"),
+                EnvField("TTS_GAME_AUDIO_VOLUME", "Original audio volume", "float", 0.3, min_value=0.0, max_value=1.0, step=0.05,
+                         help_text="How loud the original audio is when voiceover plays"),
                 EnvField("TTS_VOICEOVER_VOLUME", "Voiceover volume", "float", 1.0, min_value=0.0, max_value=2.0, step=0.05,
                          help_text="How loud the AI voiceover narration is"),
             ],
@@ -206,6 +219,8 @@ def coerce_value(field: EnvField, raw_value: Optional[str]) -> Any:
 
 def normalize_value(field: EnvField, value: Any) -> str:
     if field.field_type == "bool":
+        if isinstance(value, str):
+            value = value.strip().lower() in ("1", "true", "yes", "on")
         return "true" if value else "false"
     if value is None:
         return ""
@@ -223,7 +238,7 @@ def save_env_values(values: Dict[str, Any], extras: Optional[Dict[str, str]] = N
         lines.append("")
         lines.append("# Extra settings")
         for key, value in sorted(extras.items()):
-            if value is None:
+            if key in field_map or value is None:
                 continue
             lines.append(f"{key}={value}")
     ENV_PATH.write_text("\n".join(lines) + "\n")

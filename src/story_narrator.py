@@ -15,6 +15,8 @@ from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 
+from content_types import get_content_type
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -94,9 +96,12 @@ def _get_story_prompt(story_style: str, num_clips: int, language: str = "en") ->
     
     # Get full language name
     lang_name = LANGUAGE_NAMES.get(language, "English")
+
+    content_type = get_content_type()
+    news_role = "esports broadcaster" if content_type.family == "gaming" else "broadcast journalist"
     
     style_guides = {
-        "story_news": f"""You are a professional esports broadcaster creating a {num_clips}-part news segment.
+        "story_news": f"""You are a professional {news_role} creating a {num_clips}-part news segment.
 
 Create a cohesive news narrative that flows across all {num_clips} clips:
 - Clip 1: Opening/intro to the story
@@ -157,6 +162,40 @@ IMPORTANT: Generate 4-6 sentences per clip segment to fill the video duration. S
         return base_prompt + language_instruction
     
     return base_prompt
+
+
+def build_story_prompt(story_style: str, num_clips: int, language: str = "en", source: str = "video") -> str:
+    """Full cross-clip narration prompt for the current VIDEO_TYPE.
+
+    ``source`` is ``"video"`` when the model sees the clips themselves (Gemini)
+    or ``"frames"`` when it sees sampled keyframes (OpenAI).
+    """
+    style_guide = _get_story_prompt(story_style, num_clips, language)
+    noun = get_content_type().clip_noun
+    if source == "frames":
+        showing = f"I'm showing you {num_clips} {noun} clips as a sequence of frames. Create a unified narrative across all clips."
+        trailer = ""
+    else:
+        showing = f"I'm showing you {num_clips} {noun} clips in sequence. Watch them all and create a unified narrative."
+        trailer = "\n\nThe clips:"
+
+    return f"""{style_guide}
+
+{showing}
+
+For each clip, provide:
+1. A narration segment (2-3 sentences) that connects to the overall story
+2. Ensure narrative continuity - each segment should flow from the previous
+
+Return ONLY valid JSON:
+{{
+  "narrative_arc": "Brief description of the overall story",
+  "segments": [
+    {{"clip_index": 0, "narration": "Segment text for clip 1..."}},
+    {{"clip_index": 1, "narration": "Segment text for clip 2..."}},
+    {{"clip_index": 2, "narration": "Segment text for clip 3..."}}
+  ]
+}}{trailer}"""
 
 
 def _generate_story_gemini(
@@ -251,27 +290,7 @@ def _generate_story_gemini(
                 raise RuntimeError(f"Gemini file processing timed out after {max_wait}s")
         
         # Build prompt
-        style_guide = _get_story_prompt(story_style, len(clips), language)
-        
-        prompt = f"""{style_guide}
-
-I'm showing you {len(clips)} gameplay clips in sequence. Watch them all and create a unified narrative.
-
-For each clip, provide:
-1. A narration segment (2-3 sentences) that connects to the overall story
-2. Ensure narrative continuity - each segment should flow from the previous
-
-Return ONLY valid JSON:
-{{
-  "narrative_arc": "Brief description of the overall story",
-  "segments": [
-    {{"clip_index": 0, "narration": "Segment text for clip 1..."}},
-    {{"clip_index": 1, "narration": "Segment text for clip 2..."}},
-    {{"clip_index": 2, "narration": "Segment text for clip 3..."}}
-  ]
-}}
-
-The clips:"""
+        prompt = build_story_prompt(story_style, len(clips), language, source="video")
         
         # Create content parts with all videos
         content_parts = [prompt]
@@ -374,25 +393,7 @@ def _generate_story_openai(
         model_name = os.getenv("OPENAI_MODEL", "gpt-4o")
         
         # Build prompt
-        style_guide = _get_story_prompt(story_style, len(clips), language)
-        
-        prompt = f"""{style_guide}
-
-I'm showing you {len(clips)} gameplay clips as a sequence of frames. Create a unified narrative across all clips.
-
-For each clip, provide:
-1. A narration segment (2-3 sentences) that connects to the overall story
-2. Ensure narrative continuity - each segment should flow from the previous
-
-Return ONLY valid JSON:
-{{
-  "narrative_arc": "Brief description of the overall story",
-  "segments": [
-    {{"clip_index": 0, "narration": "Segment text for clip 1..."}},
-    {{"clip_index": 1, "narration": "Segment text for clip 2..."}},
-    {{"clip_index": 2, "narration": "Segment text for clip 3..."}}
-  ]
-}}"""
+        prompt = build_story_prompt(story_style, len(clips), language, source="frames")
         
         # Create message content with frames from each clip
         message_content = [{"type": "text", "text": prompt}]

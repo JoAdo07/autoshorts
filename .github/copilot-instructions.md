@@ -29,7 +29,8 @@ The codebase uses a flattened layout under `src/` (the older `modules/` split wa
 ```
 src/
 ├── shorts.py                # Main pipeline orchestration (analysis, selection, rendering)
-├── ai_providers.py          # AI provider abstraction (Gemini/OpenAI/Local), ClipScore, classification prompts
+├── content_types.py         # Single source of truth: 15 VIDEO_TYPEs, families, moment taxonomies, caption styles, voice presets
+├── ai_providers.py          # AI provider abstraction (Gemini/OpenAI/Local), ClipScore, prompt builders driven by content_types
 ├── subtitle_generator.py    # Whisper transcription, SRT generation and PyCaps subtitle application
 ├── tts_generator.py         # Qwen3-TTS wrapper, voice presets, generate_voice_description()
 ├── story_narrator.py        # Cross-clip story generation (narrative text)
@@ -43,6 +44,7 @@ src/
 |------|---------|
 | `run.py` | Top-level CLI entry point and signal handling |
 | `src/shorts.py` | Main pipeline orchestration and helper classes (ProcessingConfig, RenderParams) |
+| `src/content_types.py` | Registry of content types (`get_content_type()`, `resolve_caption_style()`, `get_voice_preset()`); every prompt/style/voice lookup goes through it |
 | `src/ai_providers.py` | AI provider logic: ClipScore, SemanticAnalyzer implementations, prompts |
 | `src/tts_generator.py` | TTS wrapper and voice description generator (Qwen3-TTS) |
 | `src/subtitle_generator.py` | Whisper + PyCaps transcription and subtitle rendering |
@@ -60,6 +62,8 @@ See `docs/flow_diagram.md` for detailed Mermaid diagrams.
 ## 3) Key conventions and repository-specific patterns
 
 - **Config via environment**: Use `.env` (copy `.env.example`) or export variables. Key settings: `AI_PROVIDER`, `ENABLE_TTS`, `ENABLE_SUBTITLES`, `CAPTION_STYLE`, `TARGET_RATIO_W/H`.
+
+- **Content types** (`VIDEO_TYPE` env var): defined once in `src/content_types.py`. Adding a type = adding a `ContentType` entry (taxonomy, analysis focus, styles with `prompt_guide`/`example`/`voice_key`); never hardcode style or category lists in pipeline or dashboard code. Gaming/esports keep `uses_action_heuristics=True`; all other types are AI-first (heuristic prefilter bypassed for gemini/openai).
 
 - **AI Providers** (`AI_PROVIDER` env var):
   - `gemini` - Google Gemini API (cloud)
@@ -90,6 +94,7 @@ See `docs/flow_diagram.md` for detailed Mermaid diagrams.
 | Component | File |
 |-----------|------|
 | Pipeline orchestration | `src/shorts.py` |
+| Content types / styles / voices | `src/content_types.py` |
 | AI providers | `src/ai_providers.py` |
 | Subtitles / SRT handling | `src/subtitle_generator.py` |
 | TTS / voice generation | `src/tts_generator.py` |

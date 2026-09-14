@@ -61,6 +61,12 @@ def render() -> None:
         </div>
     """, unsafe_allow_html=True)
     
+    st.success(
+        "✅ Shipped: Universal Video Type Support — 15 content types with "
+        "type-specific moment discovery, caption styles, and voice presets. "
+        "Choose your content family on the Generate page."
+    )
+
     # Phase 2 - Audio & Voice
     st.markdown("### 🗣️ Phase 2: Audio, Voice & UI")
     st.caption("Focus: Pushing the boundaries of open-source TTS and accessibility")
@@ -71,7 +77,7 @@ def render() -> None:
         with st.container():
             st.markdown("""
                 <div class="feature-item">
-                    <h4>🎙️ Multi-Speaker / Podcast Mode</h4>
+                    <h4>🎙️ Multi-Speaker Narration</h4>
                     <p>NotebookLM-style narration with distinct character voices via text prompts
                     (e.g., "Sarcastic GenZ commentator", "Hyped esports caster")</p>
                 </div>
@@ -105,22 +111,13 @@ def render() -> None:
     
     st.divider()
     
-    # Phase 3 - Universal Clipping & Visual Intelligence
-    st.markdown("### 🧠 Phase 3: Universal Clipping & Visual Intelligence")
-    st.caption("Focus: Supporting all video content types and smarter scene understanding")
+    # Phase 3 - Visual Intelligence & Automation
+    st.markdown("### 🧠 Phase 3: Visual Intelligence & Automation")
+    st.caption("Focus: Smarter layouts, automated processing, and publishing")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("""
-            <div class="feature-item">
-                <h4>🎬 Universal Video Type Support</h4>
-                <p>Clip any video, not just gaming — Podcasts, Entertainment, Sports, 
-                Vlogs, TV Shows, Documentaries, Music, Educational, Interviews, 
-                Comedy, News, Esports, Cooking & DIY, Fitness, and more</p>
-            </div>
-        """, unsafe_allow_html=True)
-        
         st.markdown("""
             <div class="feature-item">
                 <h4>📹 Facecam / Reaction Support</h4>
@@ -167,4 +164,3 @@ def render() -> None:
 
 
 render()
-

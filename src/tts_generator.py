@@ -205,19 +205,22 @@ def generate_voice_description(context: str) -> str:
     
     Args:
         context: Either a semantic type (action, funny, clutch, etc.) or 
-                caption style (gaming, genz, story_news, etc.)
+                caption style (gaming, genz, story_news, podcast_quote, etc.)
         
     Returns:
         Detailed voice description string for Qwen3-TTS VoiceDesign
     """
     # Import here to avoid circular imports
     from ai_providers import ClipScore
+    from content_types import get_voice_preset
     
-    # Get the preset
-    preset = ClipScore.CAPTION_STYLE_VOICE_MAP.get(
-        context, 
-        ClipScore.VOICE_PRESET_MAP.get(context, ClipScore.VOICE_PRESET_MAP["action"])
-    )
+    # Registry-defined styles (covers every content type) win; then the legacy
+    # gaming style map; then the gaming semantic-category presets.
+    preset = get_voice_preset(context)
+    if not preset:
+        preset = ClipScore.CAPTION_STYLE_VOICE_MAP.get(context)
+    if not preset:
+        preset = ClipScore.VOICE_PRESET_MAP.get(context, ClipScore.VOICE_PRESET_MAP["action"])
     
     logging.debug(f"Using preset voice description for '{context}': {preset.split(chr(10))[0]}...")
     return preset
