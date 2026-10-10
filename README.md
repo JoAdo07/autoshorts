@@ -8,7 +8,7 @@ AutoShorts analyzes your gameplay videos to identify the most engaging moments�
 ![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=flat&logo=PyTorch&logoColor=white)
 ![CUDA](https://img.shields.io/badge/CUDA-12.x-green)
 ![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=flat&logo=docker&logoColor=white)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 ---
 
@@ -87,7 +87,7 @@ AutoShorts automatically adapts its editing style, captions, and voiceover perso
 - **Scene Detection**: Custom implementation using `decord` + PyTorch on GPU
 - **Audio Analysis**: `torchaudio` on GPU for fast RMS and spectral flux calculation
 - **Video Analysis**: GPU streaming via `decord` for stable motion estimation
-- **Image Processing**: `cupy` (CUDA-accelerated NumPy) for blur and transforms
+- **Image Processing**: PyTorch CUDA tensors for compositing and separable Gaussian blur, with edge-preserving padding
 - **Rendering**: PyTorch + **NVENC** hardware encoder for ultra-fast rendering
 
 ### 📐 Smart Video Processing
@@ -95,7 +95,7 @@ AutoShorts automatically adapts its editing style, captions, and voiceover perso
 - Scenes ranked by combined action score (audio 0.6 + video 0.4 weights)
 - Configurable aspect ratio (default 9:16 for TikTok/Shorts/Reels)
 - Smart cropping with optional blurred background for non-vertical footage
-- Retry logic during rendering to avoid spurious failures
+- Rendering errors propagate to the caller, including spawned workers; failed partial clips are removed
 
 ### 🛡️ Robust Fallback System
 
@@ -266,11 +266,34 @@ ruff check .
 
 ### Running Tests
 
-```bash
-pytest -q
+```nu
+# One environment for both lightweight and real GPU tests
+.venv/bin/python -m pytest tests/ -q
+
+# Real CUDA tensors, NVDEC decoding, NVENC rendering, audio and subtitles
+.venv/bin/python -m pytest tests/ -q --run-gpu
+
+# Also run Qwen3-TTS and Whisper on CUDA, plus a speech/caption round trip
+.venv/bin/python -m pytest tests/ -q --run-gpu --run-models
+
+# Optional real-footage validation: use a pre-extracted 3-30 second excerpt
+.venv/bin/python -m pytest tests/gpu -q --run-gpu --gpu-sample /path/to/excerpt.mp4
 ```
 
-> Tests mock GPU availability and can run in standard CI environments.
+The default suite uses lightweight mocks and skips real GPU/model checks. Real checks
+run in fresh subprocesses so mocks cannot disguise CUDA failures. `--run-gpu` requires
+CUDA-enabled PyTorch and Decord, plus FFmpeg with NVENC/NVDEC; missing GPU support
+fails rather than falling back silently. Model tests download public weights on
+first use and need enough VRAM for Qwen3-TTS. Gemini's pipeline boundary is tested
+with fixed local responses, not live uploads or paid API calls.
+
+Use the documented single `.venv` for all dependencies. PyTorch 2.10 pairs with
+TorchCodec 0.10.0; installing an unrelated latest TorchCodec can break audio
+decoding. Decord needs FFmpeg 4.x libraries for its build, even when the system
+FFmpeg used for encoding is newer. Its EOF retry setting must be loaded **before**
+the native library is imported; the example configuration allows asynchronous
+NVDEC initialization for very short clips. No test processes a full long recording:
+`--gpu-sample` rejects inputs longer than 30 seconds and can be repeated.
 
 ### Debug Variables
 
@@ -325,7 +348,8 @@ This project builds upon the excellent work of:
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [Apache License, Version 2.0](LICENSE).
+Third-party dependencies and model weights retain their respective licenses.
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/divyaprakash0426)
 

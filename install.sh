@@ -134,11 +134,11 @@ echo "=========================================="
 
 pip install --upgrade pip wheel setuptools
 
-echo "Installing PyTorch 2.9.1 with CUDA 12.8..."
-pip install torch==2.9.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+echo "Installing PyTorch 2.10.0 with CUDA 12.8..."
+pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cu128
 
 echo "Installing torchcodec..."
-pip install --no-deps torchcodec
+pip install --no-deps torchcodec==0.10.0
 
 # Verify
 python -c "import torch; print(f'PyTorch {torch.__version__} with CUDA {torch.version.cuda}')"
@@ -164,13 +164,13 @@ echo "Detected Python version: $PYVER"
 
 case "$PYVER" in
     cp310)
-        FLASH_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.7.4+cu128torch2.9-cp310-cp310-linux_x86_64.whl"
+        FLASH_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.12/flash_attn-2.6.3+cu128torch2.10-cp310-cp310-linux_x86_64.whl"
         ;;
     cp311)
-        FLASH_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.7.4+cu128torch2.9-cp311-cp311-linux_x86_64.whl"
+        FLASH_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.12/flash_attn-2.6.3+cu128torch2.10-cp311-cp311-linux_x86_64.whl"
         ;;
     cp312)
-        FLASH_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.7.4+cu128torch2.9-cp312-cp312-linux_x86_64.whl"
+        FLASH_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.12/flash_attn-2.6.3+cu128torch2.10-cp312-cp312-linux_x86_64.whl"
         ;;
     *)
         echo -e "${YELLOW}⚠ No prebuilt wheel for Python $PYVER, attempting source build...${NC}"

@@ -241,7 +241,7 @@ def main() -> None:
             <p>Built with ❤️ using PyTorch, Streamlit & FFmpeg</p>
             <p style="font-size: 0.9rem;">
                 <a href="https://github.com/divyaprakash0426/autoshorts" target="_blank">GitHub</a> •
-                <a href="https://github.com/divyaprakash0426/autoshorts/blob/main/LICENSE" target="_blank">MIT License</a>
+                <a href="https://github.com/divyaprakash0426/autoshorts/blob/main/LICENSE" target="_blank">Apache License 2.0</a>
             </p>
         </div>
     """, unsafe_allow_html=True)

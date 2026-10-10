@@ -702,9 +702,9 @@ def rerender_video_longer(
     cmd = [
         "ffmpeg", "-y",
         "-ss", f"{render_meta.start_time:.3f}",
-        "-t", f"{target_duration:.3f}",
         "-i", str(render_meta.source_path),
-        "-vf", f"{crop_filter},{scale_filter}",
+        "-t", f"{target_duration:.3f}",
+        "-vf", f"{crop_filter},{scale_filter},tpad=stop_mode=clone:stop_duration={target_duration:.3f}",
         "-c:v", "hevc_nvenc",
         "-preset", "fast",
         "-c:a", "aac",
@@ -730,6 +730,7 @@ def mix_audio_with_video(
     game_audio_volume: float = 0.3,
     voiceover_volume: float = 1.0,
     render_meta: Optional[RenderMeta] = None,
+    source_audio_video: Optional[Path] = None,
 ) -> bool:
     """Mix voiceover audio with video's existing audio.
     
@@ -745,6 +746,7 @@ def mix_audio_with_video(
         game_audio_volume: Volume multiplier for game audio (0.0-1.0)
         voiceover_volume: Volume multiplier for voiceover (0.0-1.0)
         render_meta: Optional render metadata for re-rendering longer clips
+        source_audio_video: Original audio source when subtitles stripped the video's audio
         
     Returns:
         True if successful
@@ -793,21 +795,25 @@ def mix_audio_with_video(
     
     # Check if video has audio stream BEFORE deciding which command to use
     # PyCaps outputs typically have NO audio stream
-    has_audio = _video_has_audio_stream(working_video)
+    has_audio = _video_has_audio_stream(source_audio_video or working_video)
     
     if has_audio:
         # FFmpeg command to mix audio tracks
         # - Use duration=longest to preserve TTS when it's longer than video
         filter_complex = (
-            f"[0:a]volume={game_audio_volume}[game];"
+            f"[{2 if source_audio_video else 0}:a]volume={game_audio_volume}[game];"
             f"[1:a]volume={voiceover_volume}[voice];"
-            "[game][voice]amix=inputs=2:duration=longest:dropout_transition=2[aout]"
+            "[game][voice]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[aout]"
         )
         
         cmd = [
             "ffmpeg", "-y",
             "-i", str(working_video),
             "-i", str(voiceover_path),
+        ]
+        if source_audio_video:
+            cmd.extend(["-i", str(source_audio_video)])
+        cmd.extend([
             "-filter_complex", filter_complex,
             "-map", "0:v",
             "-map", "[aout]",
@@ -815,7 +821,7 @@ def mix_audio_with_video(
             "-c:a", "aac",
             "-b:a", "192k",
             str(output_path)
-        ]
+        ])
     else:
         # Video has no audio stream (e.g., PyCaps output)
         # Simply add TTS as the only audio track
@@ -827,6 +833,7 @@ def mix_audio_with_video(
             "-map", "0:v",
             "-map", "1:a",
             "-c:v", "copy",
+            "-filter:a", f"volume={voiceover_volume}",
             "-c:a", "aac",
             "-b:a", "192k",
             str(output_path)

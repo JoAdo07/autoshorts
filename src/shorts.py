@@ -39,6 +39,8 @@ from typing import List, Sequence, Tuple, Optional
 
 import numpy as np
 from dotenv import load_dotenv
+# Decord reads native decoder settings when its shared library is imported.
+load_dotenv()
 # moviepy is removed from the rendering path.
 # We only import it if strictly necessary for some legacy helper, but we try to avoid it.
 # import moviepy.editor as mp # Removed
@@ -59,9 +61,6 @@ from ai_providers import (
     extract_candidate_clip,
 )
 from subtitle_generator import generate_subtitles, is_subtitles_enabled
-
-# Load environment variables from a .env file if present.
-load_dotenv()
 
 # Configure basic logging.
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -456,9 +455,9 @@ def analyze_video_content(
         try:
             frames_t = vr.get_batch(range(i, end_idx))
             # frames_t: (B, H, W, 3) (uint8)
-        except Exception:
-            logging.error(f"Failed to read batch {i}-{end_idx}")
-            continue
+        except Exception as e:
+            pbar.close()
+            raise RuntimeError(f"Failed to read analysis batch {i}-{end_idx}: {e}") from e
 
         # --- Scene Detection Part (PURE GPU in FP32) ---
         # 1. Convert to Float/HSV on GPU
@@ -584,7 +583,7 @@ def analyze_video_content(
     
     # --- Finalize Scenes ---
     if not cut_indices:
-        scenes = []
+        scenes = [(_SecondsTime(0), _SecondsTime(frame_count / fps))]
     else:
         cut_indices = sorted(set(cut_indices))
         scenes = []
@@ -606,7 +605,7 @@ def analyze_video_content(
         if motions.numel() == 0:
             video_scores = np.array([])
         else:
-            std_val = motions.std()
+            std_val = motions.std(correction=0)
             if std_val == 0:
                 motions_norm = motions
             else:
@@ -615,7 +614,7 @@ def analyze_video_content(
             # Smooth
              # cpu-side smoothing is fine for 1D array
             motions_np = motions_norm.numpy()
-            win = int(fps)
+            win = min(len(motions_np), max(1, round(fps / action_step)))
             if win > 1:
                 window = np.ones(win) / win
                 video_scores = np.convolve(motions_np, window, mode='same')
@@ -686,7 +685,7 @@ def rgb_to_hsv_torch(image: torch.Tensor, epsilon: float = 1e-10) -> torch.Tenso
     # S: 0-255 -> 255 * s
     # V: 0-255 -> 255 * v
     
-    out_h = h * 179.0 # Use 179 to be safe or 180? OpenCV uses 0-179 inclusive.
+    out_h = h * 180.0
     out_s = s * 255.0
     out_v = v * 255.0
     
@@ -872,11 +871,11 @@ def compute_audio_action_profile(
 
     # Normalization
     rms_mean = rms.mean() if rms.numel() > 0 else torch.tensor(0.0, device=device)
-    rms_std = (rms.std() + 1e-8) if rms.numel() > 0 else torch.tensor(1.0, device=device)
+    rms_std = (rms.std(correction=0) + 1e-8) if rms.numel() > 0 else torch.tensor(1.0, device=device)
     rms_norm = (rms - rms_mean) / rms_std if rms.numel() > 0 else rms
 
     flux_mean = spectral_flux.mean() if spectral_flux.numel() > 0 else torch.tensor(0.0, device=device)
-    flux_std = (spectral_flux.std() + 1e-8) if spectral_flux.numel() > 0 else torch.tensor(1.0, device=device)
+    flux_std = (spectral_flux.std(correction=0) + 1e-8) if spectral_flux.numel() > 0 else torch.tensor(1.0, device=device)
     flux_norm = (spectral_flux - flux_mean) / flux_std if spectral_flux.numel() > 0 else spectral_flux
 
     # Smoothing
@@ -960,8 +959,10 @@ def gaussian_blur_torch(image: torch.Tensor, sigma: float) -> torch.Tensor:
     padding_w = kernel_size // 2
     
     # Apply separable blur
-    blurred = torch.nn.functional.conv2d(img, kernel_h, padding=(padding_h, 0), groups=C)
-    blurred = torch.nn.functional.conv2d(blurred, kernel_w, padding=(0, padding_w), groups=C)
+    padded = torch.nn.functional.pad(img, (0, 0, padding_h, padding_h), mode="replicate")
+    blurred = torch.nn.functional.conv2d(padded, kernel_h, groups=C)
+    padded = torch.nn.functional.pad(blurred, (padding_w, padding_w, 0, 0), mode="replicate")
+    blurred = torch.nn.functional.conv2d(padded, kernel_w, groups=C)
     
     # Convert back to original format
     if squeeze_output:
@@ -1224,6 +1225,10 @@ def render_video_gpu(
     """Render the clip using GPU compositing and FFMPEG NVENC (Optimized)."""
 
     logging.info(f"Rendering GPU: {output_path.name}")
+    if params.output_width <= 0 or params.output_height <= 0 or params.duration <= 0:
+        raise ValueError("Render dimensions and duration must be positive")
+    if params.output_width % 2 or params.output_height % 2:
+        raise ValueError("NVENC yuv420p output dimensions must be even")
 
     # 1. Extract audio (transcode to AAC for compatibility with various source codecs like Opus)
     temp_audio = output_path.with_suffix(".aac")
@@ -1295,6 +1300,8 @@ def render_video_gpu(
         ffmpeg_log.close()
         raise
 
+    frames_written = 0
+    render_failed = False
     # 3. GPU Rendering Loop
     # Use torch.no_grad() to prevent graph building overhead
     with torch.no_grad():
@@ -1345,8 +1352,7 @@ def render_video_gpu(
                     # REMOVED: The block causing the leak (del vr / new vr)
 
                     if process.poll() is not None:
-                        logging.error("FFMPEG died")
-                        break
+                        raise RuntimeError("FFmpeg exited before rendering completed")
 
                     batch_idxs = frame_indices[i: i + BATCH_SIZE]
                     # Clamp indices
@@ -1356,8 +1362,7 @@ def render_video_gpu(
                     try:
                         frames = vr.get_batch(batch_idxs)  # (B, H, W, 3)
                     except Exception as e:
-                        logging.warning(f"Batch read failed: {e}")
-                        break
+                        raise RuntimeError(f"Failed to decode render batch: {e}") from e
 
                     # 1. Background Processing
                     bg_frames = frames[:, bg_crop_y:bg_crop_y + bg_crop_h, bg_crop_x:bg_crop_x + bg_crop_w, :]
@@ -1406,8 +1411,9 @@ def render_video_gpu(
 
                     try:
                         process.stdin.write(out_bytes)
-                    except BrokenPipeError:
-                        break
+                        frames_written += len(batch_idxs)
+                    except BrokenPipeError as e:
+                        raise RuntimeError("FFmpeg rawvideo pipe closed during rendering") from e
 
                     # 5. Explicit Cleanup (Critical for Loop)
                     del frames, bg_frames, bg_small, blurred_bg, final_bg, fg_frames, final_fg, out_tensor, out_bytes
@@ -1419,13 +1425,15 @@ def render_video_gpu(
                     pbar_render.update(1)
 
         except Exception as e:
+            render_failed = True
             logging.error(f"Error during GPU render: {e}", exc_info=True)
+            raise
         finally:
             # Clean up processes and memory
             if process:
                 try:
                     process.stdin.close()
-                except Exception:
+                except BrokenPipeError:
                     pass
                 process.wait()
 
@@ -1442,25 +1450,37 @@ def render_video_gpu(
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
             gc.collect()
+            if render_failed or process.returncode != 0 or frames_written != total_frames:
+                output_path.unlink(missing_ok=True)
+                if not render_failed:
+                    detail = log_path.read_text(errors="replace")[-2000:]
+                    raise RuntimeError(f"GPU render failed (FFmpeg exit {process.returncode}): {detail}")
 
 
-def render_video_gpu_isolated(*args, **kwargs) -> None:
+def render_video_gpu_isolated(
+    params: RenderParams, output_path: Path, max_error_depth: int = 3
+) -> None:
     """Runs render_video_gpu in a separate process to ensure memory cleanup."""
     # Use 'spawn' to ensure a fresh process space
     ctx = multiprocessing.get_context('spawn')
-    p = ctx.Process(
-        target=render_video_gpu,
-        args=args,
-        kwargs=kwargs
-    )
-    p.start()
-    p.join()
-
-    if p.exitcode != 0:
-        logging.error("Render process failed with exit code %s", p.exitcode)
-        # If exit code is 137 (128+9) or -9, it was likely OOM killed.
-        if p.exitcode == -9 or p.exitcode == 137:
-             logging.error("Render process was likely OOM killed.")
+    # Keep incomplete output private, even if native code crashes or OOM kills
+    # the child before its finally block can run.
+    with tempfile.TemporaryDirectory(prefix=".autoshorts-render-", dir=output_path.parent) as working_dir:
+        temporary_output = Path(working_dir) / output_path.name
+        p = ctx.Process(
+            target=render_video_gpu,
+            args=(params, temporary_output),
+            kwargs={"max_error_depth": max_error_depth},
+        )
+        p.start()
+        p.join()
+        if p.exitcode != 0:
+            log_path = temporary_output.with_suffix(".ffmpeg.log")
+            detail = log_path.read_text(errors="replace")[-2000:] if log_path.exists() else ""
+            raise RuntimeError(f"Render process failed with exit code {p.exitcode}: {detail}")
+        if not temporary_output.is_file() or temporary_output.stat().st_size == 0:
+            raise RuntimeError("Render process produced no video")
+        temporary_output.replace(output_path)
 
 
 def combine_scenes(scene_list: Sequence[Tuple], config: ProcessingConfig) -> List[List]:

@@ -448,35 +448,28 @@ def _apply_ffmpeg_subtitles(
     outline_hex = config.shadow_color.lstrip("#")
     highlight_hex = config.highlight_color.lstrip("#")
     
-    # Convert SRT to styled ASS for better control
-    ass_path = srt_path.with_suffix(".ass")
-    _convert_srt_to_ass(srt_path, ass_path, config)
-    
-    # Use the ASS file for subtitle burn-in
-    subtitle_filter = f"ass='{ass_path}'"
-    
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(video_path),
-        "-vf", subtitle_filter,
-        "-c:v", "hevc_nvenc",  # Use GPU encoding
-        "-preset", "slow",
-        "-cq", "23",
-        "-c:a", "copy",
-        str(output_path)
-    ]
-    
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    import tempfile
+
+    # A relative safe filename avoids FFmpeg's multiple filter-escaping layers
+    # for source paths containing apostrophes, commas, brackets or colons.
+    with tempfile.TemporaryDirectory(prefix="autoshorts-subtitles-") as working_dir:
+        ass_path = Path(working_dir) / "captions.ass"
+        _convert_srt_to_ass(srt_path, ass_path, config)
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(video_path.resolve()),
+            "-vf", "ass=filename=captions.ass",
+            "-c:v", "hevc_nvenc",
+            "-preset", "slow",
+            "-cq", "23",
+            "-c:a", "copy",
+            str(output_path.resolve())
+        ]
+        result = subprocess.run(cmd, cwd=working_dir, capture_output=True, text=True)
     
     if result.returncode != 0:
         logging.error(f"FFmpeg subtitle burn-in failed: {result.stderr[:200]}")
         return False
-    
-    # Clean up temp ASS file
-    try:
-        ass_path.unlink()
-    except Exception:
-        pass
     
     return output_path.exists()
 
@@ -1348,42 +1341,20 @@ def generate_subtitles(
                     game_vol = float(os.getenv("TTS_GAME_AUDIO_VOLUME", "0.3"))
                     voice_vol = float(os.getenv("TTS_VOICEOVER_VOLUME", "1.0"))
                     
-                    # PyCaps output has NO AUDIO, so we need to mix 3 streams:
-                    # 1. Video from PyCaps output (output_path)
-                    # 2. Audio from source video (audio_source_video)
-                    # 3. TTS voiceover
-                    logging.info(f"Mixing: video from PyCaps, audio from source, TTS voiceover")
-                    
-                    filter_complex = (
-                        f"[1:a]volume={game_vol}[game];"
-                        f"[2:a]volume={voice_vol}[voice];"
-                        "[game][voice]amix=inputs=2:duration=longest:dropout_transition=2[aout]"
+                    from tts_generator import mix_audio_with_video
+                    mixed = mix_audio_with_video(
+                        output_path, voiceover_path, mixed_output,
+                        game_audio_volume=game_vol, voiceover_volume=voice_vol,
+                        source_audio_video=audio_source_video,
                     )
-                    
-                    cmd = [
-                        "ffmpeg", "-y",
-                        "-i", str(output_path),         # Video from PyCaps (no audio)
-                        "-i", str(audio_source_video),  # Audio source (original/extended video)
-                        "-i", str(voiceover_path),      # TTS voiceover
-                        "-filter_complex", filter_complex,
-                        "-map", "0:v",                  # Video from PyCaps
-                        "-map", "[aout]",               # Mixed audio
-                        "-c:v", "copy",
-                        "-c:a", "aac",
-                        "-b:a", "192k",
-                        str(mixed_output)
-                    ]
-                    
-                    import subprocess
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                    
-                    if result.returncode == 0 and mixed_output.exists():
+
+                    if mixed and mixed_output.exists():
                         # Replace subtitled version with voiced version
                         output_path.unlink()
                         mixed_output.rename(output_path)
                         logging.info(f"TTS voiceover added successfully")
                     else:
-                        logging.warning(f"TTS audio mixing failed: {result.stderr[:300]}")
+                        logging.warning("TTS audio mixing failed, keeping subtitles only")
                     
                     # Cleanup the pre-generated TTS file
                     try:

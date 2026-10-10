@@ -89,17 +89,17 @@ install_decord: $(VENV_DIR) install_nv_codec_headers
 	cd $(DECORD_BUILD_DIR)/python && $(PYTHON) setup.py install
 	
 	@echo "Manually copying libdecord.so to site-packages (fix for loading error)..."
-	cp $(DECORD_BUILD_DIR)/build/libdecord.so $(shell pwd)/$(VENV_DIR)/lib/python3.10/site-packages/decord/
+	cp $(DECORD_BUILD_DIR)/build/libdecord.so "$$($(PYTHON) -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/decord/"
 	
 	@echo "Cleaning up..."
 	rm -rf $(DECORD_BUILD_DIR)
 
-# Install PyTorch with CUDA 12.6 support
+# Install the matching PyTorch/TorchCodec pair with CUDA 12.8 support
 install_torch: $(VENV_DIR)
-	@echo "Installing PyTorch 2.10 with CUDA 12.6..."
-	$(PIP) install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+	@echo "Installing PyTorch 2.10 with CUDA 12.8..."
+	$(PIP) install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cu128
 	@echo "Installing torchcodec for torchaudio video support..."
-	$(PIP) install torchcodec
+	$(PIP) install torchcodec==0.10.0
 
 # Install FlashAttention 2 from prebuilt wheel
 install_flash_attn: $(VENV_DIR)
