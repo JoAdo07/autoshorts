@@ -1,356 +1,113 @@
 # AutoShorts
 
-> Automatically generate viral-ready vertical short clips from long-form gameplay footage using AI-powered scene analysis, GPU-accelerated rendering, and optional AI voiceovers.
-
-AutoShorts analyzes your gameplay videos to identify the most engaging moments—action sequences, funny fails, or highlight achievements—then automatically crops, renders, and adds subtitles or AI voiceovers to create ready-to-upload short-form content.
-
-![Python](https://img.shields.io/badge/python-3.10-blue)
-![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=flat&logo=PyTorch&logoColor=white)
-![CUDA](https://img.shields.io/badge/CUDA-12.x-green)
-![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=flat&logo=docker&logoColor=white)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-
----
-
-## 🎬 Example Output
-
-Here are some shorts automatically generated from gameplay footage:
-
-| sample 1 | sample 2 | sample 3 | sample 4 |
-| :---: | :---: | :---: | :---: |
-| ![sample 1](generated/showcase/indianajones_pt1_scene-0.gif) | ![sample 2](generated/showcase/indianajones_pt1_scene-1.gif) | ![sample 3](generated/showcase/indianajones_pt1_scene-2.gif) | ![sample 4](generated/showcase/indianajones_pt1_scene-3.gif) |
-
-### 🎥 Showcase: Multi-Language & Style Generation
-
-AutoShorts automatically adapts its editing style, captions, and voiceover personality based on the content and target language. Here are some examples generated entirely by the pipeline:
-
-| Content | Style | Language | Video |
-| :--- | :--- | :--- | :--- |
-| **Fortnite** | Story Roast | 🇺🇸 English | [Watch Part 1](https://www.youtube.com/shorts/tTUipTAdBlk) |
-| **Indiana Jones** | GenZ Slang | 🇺🇸 English | [Watch Part 1](https://www.youtube.com/shorts/VAOlR5RAX14) |
-| **Battlefield 6** | Dramatic Story | 🇯🇵 Japanese | [Watch Part 1](https://www.youtube.com/shorts/DYNEr1CzTpY) |
-| **Indiana Jones** | Story News | 🇨🇳 Chinese | [Watch Part 1](https://www.youtube.com/shorts/kGRrpu66fpk) |
-| **Fortnite** | Story Roast | 🇪🇸 Spanish | [Watch Part 1](https://www.youtube.com/shorts/5QcelWS1oSo) |
-| **Fortnite** | Story Roast | 🇷🇺 Russian | [Watch Part 1](https://www.youtube.com/shorts/A06FdnycTYo) |
-| **Indiana Jones** | Auto Gameplay | 🇧🇷 Portuguese | [Watch Part 1](https://www.youtube.com/shorts/qDFsTnH9qxc) |
-
----
-
-## ✨ Features
-
-### 🎯 AI-Powered Scene Analysis
-
-- **Multi-Provider Support**: Choose between **OpenAI** (GPT-5-mini, GPT-4o) or **Google Gemini** for scene analysis, or run in `local` mode with heuristic scoring (no API needed)
-- **Gemini Deep Analysis Mode** 🧠: Upload full video to Gemini for context-aware scene detection — the AI sees the whole game, not just short clips
-- **7 Semantic Types** (all analyzed automatically):
-  - `action` — Combat, kills, intense gameplay, close calls
-  - `funny` — Fails, glitches, unexpected humor, comedic timing
-  - `clutch` — 1vX situations, comebacks, last-second wins
-  - `wtf` — Unexpected events, "wait what?" moments, random chaos
-  - `epic_fail` — Embarrassing deaths, tragic blunders, game-losing mistakes
-  - `hype` — Celebrations, "LET'S GO" energy, peak excitement
-  - `skill` — Trick shots, IQ plays, advanced mechanics, impressive techniques
-
-### 🎙️ Subtitle Generation
-
-- **Speech Mode**: Uses OpenAI Whisper to transcribe voice/commentary
-- **AI Captions Mode**: AI-generated contextual captions for gameplay without voice
-- **Caption Styles**:
-  - Classic: `gaming`, `dramatic`, `funny`, `minimal`
-  - **GenZ Mode** ✨: `genz` - Slang-heavy reactions ("bruh 💀", "no cap", "finna")
-  - **Story Modes** ✨: Narrative-style captions
-    - `story_news` - Professional esports broadcaster
-    - `story_roast` - Sarcastic roasting commentary
-    - `story_creepypasta` - Horror/tension narrative
-    - `story_dramatic` - Epic cinematic narration
-  - `auto` - Auto-match style to detected semantic type
-- **PyCaps Integration**: Multiple visual templates including `hype`, `retro-gaming`, `neo-minimal`
-- **AI Enhancement**: Semantic tagging and emoji suggestions (e.g., "HEADSHOT! 💀🔥")
-
-### 🔊 AI Voiceover (Qwen3-TTS)
-
-- **Voice Design Engine**: Powered by **Qwen3-TTS 1.7B-VoiceDesign** for creating unique voices from natural language descriptions
-- **Dynamic Voice Generation**: AI automatically generates voice persona based on caption style + caption content
-- **Style-Adaptive Voices**: Each caption style has a unique voice preset:
-  - GenZ → Casual energetic voice with modern slang
-  - Story News → Professional broadcaster
-  - Story Roast → Sarcastic playful narrator
-  - Story Creepypasta → Deep ominous voice with tension
-  - Story Dramatic → Epic movie-trailer narrator
-- **Natural Language Instructions**: Define voice characteristics via text prompts without needing reference audio
-- **Ultra-Low Latency**: Local inference with FlashAttention 2 optimization
-- **Multilingual Support**: Native support for 10+ languages including English, Chinese, Japanese, Korean
-- **Smart Mixing**: Automatic ducking of game audio when voiceover plays
-
-### ⚡ GPU-Accelerated Pipeline
-
-- **Scene Detection**: Custom implementation using `decord` + PyTorch on GPU
-- **Audio Analysis**: `torchaudio` on GPU for fast RMS and spectral flux calculation
-- **Video Analysis**: GPU streaming via `decord` for stable motion estimation
-- **Image Processing**: PyTorch CUDA tensors for compositing and separable Gaussian blur, with edge-preserving padding
-- **Rendering**: PyTorch + **NVENC** hardware encoder for ultra-fast rendering
-
-### 📐 Smart Video Processing
-
-- Scenes ranked by combined action score (audio 0.6 + video 0.4 weights)
-- Configurable aspect ratio (default 9:16 for TikTok/Shorts/Reels)
-- Smart cropping with optional blurred background for non-vertical footage
-- Rendering errors propagate to the caller, including spawned workers; failed partial clips are removed
-
-### 🛡️ Robust Fallback System
-
-AutoShorts is designed to work even when optimal components fail:
-
-| Component | Primary | Fallback |
-| :--- | :--- | :--- |
-| **Video Encoding** | NVENC (GPU) | libx264 (CPU) |
-| **Subtitle Rendering** | PyCaps (styled) | FFmpeg burn-in (basic) |
-| **AI Analysis** | OpenAI/Gemini API | Heuristic scoring (`local` mode) |
-| **TTS Device** | GPU (6GB+ VRAM) | CPU Fallback (slower) |
-
----
-
-## 📋 Requirements
-
-### Hardware
-
-- **NVIDIA GPU** with CUDA support (6GB+ VRAM recommended for Qwen3-TTS 1.7B)
-- **NVIDIA Drivers** and **System RAM** (16GB+ recommended)
-
-### Software
-
-- Python 3.10
-- FFmpeg 4.4.2 (for Decord compatibility)
-- CUDA Toolkit with `nvcc` (for building Decord from source)
-- System libraries: `libgl1`, `libglib2.0-0`
-
----
-
-## 🚀 Installation
-
-### Option 1: Makefile Installation (Recommended)
-
-The Makefile handles everything automatically—environment creation, dependency installation, and building Decord with CUDA support.
-
-```bash
-git clone https://github.com/divyaprakash0426/autoshorts.git
-cd autoshorts
-
-# Run the installer (uses conda/micromamba automatically)
-make install
-
-# Setup environment variables
-cp .env.example .env
-# Edit .env and add your API keys (Gemini/OpenAI) 
-
-# Activate the environment
-overlay use .venv/bin/activate.nu    # For Nushell
-# OR
-source .venv/bin/activate            # For Bash/Zsh
-```
-
-The Makefile will:
-
-1. Download micromamba if conda/mamba is not found
-2. Create a Python 3.10 environment with FFmpeg 4.4.2
-3. Install NV Codec Headers for NVENC support
-4. Build Decord from source with CUDA enabled
-5. Install all pip requirements
-
-### Option 2: Docker (GPU Required)
-
-**Prerequisite**: [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) must be installed.
-
-```bash
-# Build the image
-docker build -t autoshorts .
-
-# Run with GPU access
-docker run --rm \
-    --gpus all \
-    -v $(pwd)/gameplay:/app/gameplay \
-    -v $(pwd)/generated:/app/generated \
-    --env-file .env \
-    autoshorts
-```
-
-> **Note**: The `--gpus all` flag is essential for NVENC and CUDA acceleration.
-
----
-
-## ⚙️ Configuration
-
-Copy `.env.example` to `.env` and configure:
-
-```bash
-cp .env.example .env
-```
-
-### Key Configuration Options
-
-| Category | Variable | Description |
-| :--- | :--- | :--- |
-| **AI Provider** | `AI_PROVIDER` | `openai`, `gemini`, or `local` (heuristic-only, no API) |
-| | `VIDEO_TYPE` | Content type preset — one of `gaming`, `esports`, `podcasts`, `interviews`, `news_commentary`, `entertainment`, `tv_shows`, `comedy`, `music`, `vlogs`, `cooking_diy`, `fitness`, `educational`, `documentaries`, `sports`. Drives the analysis taxonomy/prompts, the heuristic-vs-AI-first selection strategy, and `CAPTION_STYLE=auto` defaults (see `src/content_types.py`) |
-| | `AI_ANALYSIS_ENABLED` | Enable/disable AI scene analysis |
-| | `GEMINI_DEEP_ANALYSIS` | Gemini-only: upload full video for smarter scene detection (slower initial upload, better results) |
-| | `OPENAI_MODEL` | Model for analysis (e.g., `gpt-5-mini`) |
-| | `AI_SCORE_WEIGHT` | How much to weight AI vs heuristic (0.0-1.0) |
-| **Semantic Analysis** | *(per `VIDEO_TYPE`)* | Each content type has its own moment taxonomy — gaming: `action`, `funny`, `clutch`, `wtf`, `epic_fail`, `hype`, `skill`; podcasts: `quote`, `insight`, `debate`, `funny`, `story`, `revelation`; etc. |
-| | `CANDIDATE_CLIP_COUNT` | Number of clips to analyze |
-| **Subtitles** | `ENABLE_SUBTITLES` | Enable subtitle generation |
-| | `SUBTITLE_MODE` | `speech` (Whisper), `ai_captions`, or `none` |
-| | `CAPTION_STYLE` | `auto` (AI-detected category → the content type's matching style) or an explicit style key. Gaming: `gaming`, `dramatic`, `funny`, `minimal`, `genz`, `story_news`, `story_roast`, `story_creepypasta`, `story_dramatic`; other types expose their own curated styles (e.g. `podcast_quote`, `sports_playbyplay`, `educational_explainer`, `news_breaking`) |
-| | `PYCAPS_TEMPLATE` | Visual template for captions |
-| **TTS Voiceover** | `ENABLE_TTS` | Enable Qwen3-TTS voiceover |
-| | `TTS_LANGUAGE` | Language code (`en`, `zh`, `ja`, `ko`, `de`, `fr`, `ru`, `pt`, `es`, `it`) |
-| | `TTS_VOICE_DESCRIPTION` | Natural language voice description (auto-generated if empty) |
-| | `TTS_GAME_AUDIO_VOLUME` | Original audio volume when TTS plays (0.0-1.0, default 0.3) |
-| | `TTS_VOICEOVER_VOLUME` | TTS voiceover volume (0.0-1.0, default 1.0) |
-| **Video Output** | `TARGET_RATIO_W/H` | Aspect ratio (default 9:16) |
-| | `SCENE_LIMIT` | Max clips per source video |
-| | `MIN/MAX_SHORT_LENGTH` | Clip duration bounds (seconds) |
-
-See `.env.example` for the complete list with detailed descriptions.
-
----
-
-## 📖 Usage
-
-1. **Place source videos** in the `gameplay/` directory
-2. **Run the script**:
-
-   ```bash
-   python run.py
-   ```
-
-3. **Generated clips** are saved to `generated/`
-
-### 🧭 Dashboard (Streamlit UI)
-
-Launch the local dashboard to configure settings, start jobs, and preview clips:
-
-```bash
-streamlit run src/dashboard/About.py
-```
-
-| About | Generate | Browse |
-| :---: | :---: | :---: |
-| ![About](assets/dashboard/dashboard_about.png) | ![Generate](assets/dashboard/dashboard_generate.png) | ![Browse](assets/dashboard/dashboard_browse.png) |
-
-| Features | Settings | Roadmap |
-| :---: | :---: | :---: |
-| ![Features](assets/dashboard/dashboard_features.png) | ![Settings](assets/dashboard/dashboard_settings.png) | ![Coming Soon](assets/dashboard/dashboard_coming_soon.png) |
-
-### Output Structure
-
-```text
-generated/
-├── video_name scene-0.mp4          # Rendered short clip
-├── video_name scene-0_sub.json     # Subtitle data
-├── video_name scene-0.ffmpeg.log   # Render log
-├── video_name scene-1.mp4
-└── ...
-```
-
----
-
-## 🧪 Development
-
-### Linting
-
-```bash
-pip install ruff
-ruff check .
-```
-
-### Running Tests
+Turn long-form videos into short clips with AI-assisted moment selection,
+GPU rendering, styled captions, and optional voiceovers.
+
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+[![Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+## What it does
+
+- **Content-aware clipping:** 15 presets with their own moment categories, analysis
+  prompts, caption styles, and voice presets. Gaming/esports use action heuristics
+  plus AI ranking; other types use AI-first selection.
+- **Flexible analysis:** Gemini, including full-video deep analysis; OpenAI vision;
+  or local heuristic selection without API analysis.
+- **Captions and narration:** Whisper transcription, AI-written captions, PyCaps
+  styling with FFmpeg fallback, and cross-clip story narration.
+- **Optional voiceovers:** Local Qwen3-TTS with multilingual voice design,
+  adjustable source/voice volumes, and subtitle timing matched to speech.
+- **GPU rendering:** CUDA decoding and analysis, cropping, blurred backgrounds,
+  configurable aspect ratios, and NVENC encoding.
+- **Dashboard:** Choose content and caption styles, manage the video queue,
+  monitor jobs, and browse generated clips.
+
+**Supported content:** gaming, esports, podcasts, interviews, news/commentary,
+entertainment, TV shows, comedy, music, vlogs, cooking/DIY, fitness, education,
+documentaries, and sports.
+
+**Examples:** [English roast](https://www.youtube.com/shorts/tTUipTAdBlk) /
+[Japanese narration](https://www.youtube.com/shorts/DYNEr1CzTpY) /
+[Chinese news style](https://www.youtube.com/shorts/kGRrpu66fpk).
+
+## Get started
+
+You need an NVIDIA GPU and driver, a CUDA toolkit with `nvcc`, FFmpeg with
+NVENC support, and Python 3.10+. For voiceovers, 6 GB+ VRAM and 16 GB system RAM
+are recommended.
 
 ```nu
-# One environment for both lightweight and real GPU tests
+git clone https://github.com/divyaprakash0426/autoshorts.git
+cd autoshorts
+make install
+cp .env.example .env
+```
+
+The [Makefile](Makefile) creates a single `.venv` with the Python dependencies and
+CUDA-enabled Decord. Decord's build requires FFmpeg 4.x libraries; see
+[environment.yml](environment.yml). PyTorch 2.10 pairs with TorchCodec 0.10.0.
+An interactive [installer](install.sh) and [Docker setup](Dockerfile) are also
+provided; Docker requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
+
+Edit `.env` before running: choose a content type and AI provider, add the
+corresponding API key, and set `DEBUG_SKIP_ANALYSIS=false` and
+`DEBUG_SKIP_RENDER=false` for normal processing.
+
+### Dashboard or CLI
+
+```nu
+# Dashboard: configure settings, add videos, and start processing
+.venv/bin/python -m streamlit run src/dashboard/About.py
+
+# CLI: read videos from gameplay/ and write clips to generated/
+.venv/bin/python run.py
+```
+
+Use the dashboard's file picker or place source videos in `gameplay/`.
+Output clips are saved in `generated/`.
+
+## Configuration
+
+Settings live in `.env` and can also be changed through the dashboard.
+
+| Setting | Purpose |
+| --- | --- |
+| `AI_PROVIDER` | `gemini`, `openai`, or `local` |
+| `VIDEO_TYPE` | Content preset, such as `gaming`, `podcasts`, or `educational` |
+| `ENABLE_SUBTITLES` / `SUBTITLE_MODE` | Toggle captions; choose `speech`, `ai_captions`, or `none` |
+| `CAPTION_STYLE` | `auto` matches the detected moment; explicit styles are content-specific |
+| `ENABLE_TTS` / `TTS_LANGUAGE` | Toggle voiceovers and select their language |
+| `SCENE_LIMIT` | Maximum clips per source video |
+| `MIN_SHORT_LENGTH` / `MAX_SHORT_LENGTH` | Clip duration bounds; `0` selects automatic lengths |
+| `TARGET_RATIO_W` / `TARGET_RATIO_H` | Output aspect ratio, typically `9` / `16` |
+
+See [.env.example](.env.example) for all settings and
+[voice design](docs/TTS_VOICE_DESIGN.md) for advanced TTS options.
+
+**Privacy and cost:** Cloud providers receive video content. Gemini deep analysis
+uploads the full source video; API usage may incur charges. `local` uses heuristic
+selection instead, but GPU rendering still requires NVIDIA hardware.
+
+## Development
+
+```nu
+# Lightweight suite; real GPU/model checks are skipped
 .venv/bin/python -m pytest tests/ -q
 
-# Real CUDA tensors, NVDEC decoding, NVENC rendering, audio and subtitles
-.venv/bin/python -m pytest tests/ -q --run-gpu
-
-# Also run Qwen3-TTS and Whisper on CUDA, plus a speech/caption round trip
+# Include actual CUDA decoding, rendering, and local model inference
 .venv/bin/python -m pytest tests/ -q --run-gpu --run-models
-
-# Optional real-footage validation: use a pre-extracted 3-30 second excerpt
-.venv/bin/python -m pytest tests/gpu -q --run-gpu --gpu-sample /path/to/excerpt.mp4
 ```
 
-The default suite uses lightweight mocks and skips real GPU/model checks. Real checks
-run in fresh subprocesses so mocks cannot disguise CUDA failures. `--run-gpu` requires
-CUDA-enabled PyTorch and Decord, plus FFmpeg with NVENC/NVDEC; missing GPU support
-fails rather than falling back silently. Model tests download public weights on
-first use and need enough VRAM for Qwen3-TTS. Gemini's pipeline boundary is tested
-with fixed local responses, not live uploads or paid API calls.
+See [Contributing](CONTRIBUTING.md) for test prerequisites and bounded footage
+checks, [pipeline flow](docs/flow_diagram.md) for architecture, and
+[Roadmap](ROADMAP.md) for planned features.
 
-Use the documented single `.venv` for all dependencies. PyTorch 2.10 pairs with
-TorchCodec 0.10.0; installing an unrelated latest TorchCodec can break audio
-decoding. Decord needs FFmpeg 4.x libraries for its build, even when the system
-FFmpeg used for encoding is newer. Its EOF retry setting must be loaded **before**
-the native library is imported; the example configuration allows asynchronous
-NVDEC initialization for very short clips. No test processes a full long recording:
-`--gpu-sample` rejects inputs longer than 30 seconds and can be repeated.
+## License and credits
 
-### Debug Variables
+[Apache 2.0](LICENSE); see [NOTICE](NOTICE). Dependencies and model weights retain
+their own licenses.
 
-For faster iteration during development, you can skip expensive steps using these environment variables in your `.env`:
+Built on work from [shorts-maker-gpu](https://github.com/artryazanov/shorts-maker-gpu)
+and [Auto-YouTube-Shorts-Maker](https://github.com/Binary-Bytes/Auto-YouTube-Shorts-Maker).
 
-| Variable | Description |
-| :--- | :--- |
-| `DEBUG_SKIP_ANALYSIS=1` | Skip AI scene analysis (uses cached/heuristic scores) |
-| `DEBUG_SKIP_RENDER=1` | Skip video rendering (useful for testing analysis only) |
-| `DEBUG_RENDERED_CLIPS="path1:category,path2"` | Test with specific pre-rendered clips |
-
-Example workflow for testing subtitles only:
-
-```bash
-# In .env
-DEBUG_SKIP_ANALYSIS=1
-DEBUG_SKIP_RENDER=1
-DEBUG_RENDERED_CLIPS="generated/test_clip.mp4:action"
-```
-
----
-
-## 🔧 Troubleshooting
-
-| Issue | Solution |
-| :--- | :--- |
-| **"CUDA not available"** | Ensure `--gpus all` (Docker) or CUDA toolkit is installed |
-| **NVENC Error** | Falls back to `libx264` automatically; check GPU driver |
-| **PyCaps fails** | Falls back to FFmpeg burn-in subtitles automatically |
-| **Decord EOF hang** | Increase `DECORD_EOF_RETRY_MAX` or set `DECORD_SKIP_TAIL_FRAMES=300` |
-| **API rate limits** | Switch to `gpt-5-mini` (10M free tokens/day) or use `local` provider |
-
----
-
-## 🤝 Contributing & Roadmap
-
-We love contributions! Whether you're fixing a bug, adding a feature, or improving documentation:
-
-- Check out our **[Contributing Guide](CONTRIBUTING.md)** to get started.
-- See the **[Roadmap](ROADMAP.md)** for our future plans (YOLO Auto-Zoom, Next-Gen TTS, etc.).
-
----
-
-## 🙏 Acknowledgments
-
-This project builds upon the excellent work of:
-
-- **[artryazanov/shorts-maker-gpu](https://github.com/artryazanov/shorts-maker-gpu)** — Heuristics-based shorts maker
-- **[Binary-Bytes/Auto-YouTube-Shorts-Maker](https://github.com/Binary-Bytes/Auto-YouTube-Shorts-Maker)** — Original concept and inspiration
-
----
-
-## 📄 License
-
-This project is licensed under the [Apache License, Version 2.0](LICENSE).
-Third-party dependencies and model weights retain their respective licenses.
-
-[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/divyaprakash0426)
-
-**Note: All donations go to charity.**
+[Support the project](https://www.buymeacoffee.com/divyaprakash0426) -- donations go to charity.
