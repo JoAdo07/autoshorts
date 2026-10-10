@@ -6,6 +6,14 @@ GPU rendering, styled captions, and optional voiceovers.
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 [![Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
+## Showcase
+
+Four clips generated from gameplay footage:
+
+| Clip 1 | Clip 2 | Clip 3 | Clip 4 |
+| :---: | :---: | :---: | :---: |
+| ![Gameplay clip 1](generated/showcase/indianajones_pt1_scene-0.gif) | ![Gameplay clip 2](generated/showcase/indianajones_pt1_scene-1.gif) | ![Gameplay clip 3](generated/showcase/indianajones_pt1_scene-2.gif) | ![Gameplay clip 4](generated/showcase/indianajones_pt1_scene-3.gif) |
+
 ## What it does
 
 - **Content-aware clipping:** 15 presets with their own moment categories, analysis
